@@ -25,8 +25,8 @@
 #include "json.hpp"
 #include "traj_simulate.hpp"
 #include "minimal_publisher.hpp"
-#include "data_dumper.hpp"
 #include "butterworth.hpp"
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
 using json = nlohmann::json;
 
@@ -69,13 +69,6 @@ int main(int argc, char** argv) {
   double torque_limit = config[config_name]["torque_limit"];
 
   bool swap_torque = config[config_name]["swap_torque"];
-  bool use_dummy_force = config[config_name]["use_dummy_force"];
-
-  //ergodic setup
-  bool use_ergodic_force = config[config_name]["use_ergodic_force"];
-  std::vector<double> ergodic_values = config[config_name]["ergodic_gains"];
-  Eigen::VectorXd ergodic_vec = Eigen::Map<Eigen::VectorXd>(ergodic_values.data(), ergodic_values.size());
-  Eigen::MatrixXd ergodic_gains = ergodic_vec.asDiagonal();
 
   //stiffness
   std::vector<double> stiffness_values = config[config_name]["stiffness"];
@@ -127,9 +120,17 @@ int main(int argc, char** argv) {
   std::vector<double> velocity_max_damping_values = config[config_name]["velocity_max"]["damping"];
   Eigen::VectorXd velocity_max_damping = Eigen::Map<Eigen::VectorXd>(velocity_max_damping_values.data(), velocity_max_damping_values.size());
 
+  const std::string ft_ip = config[config_name]["ft_ip"];
+  const std::string ns = config[config_name]["ns"];
+  const std::string partner_ns = config[config_name]["partner_ns"];
+
+  const bool bilateral = config[config_name]["bilateral_enable"];
+  const double bilateral_trans_stiffness = config[config_name]["bilateral_trans_stiff"];
+  const double bilateral_rot_stiffness = config[config_name]["bilateral_rot_stiff"];
+
   //connect to sensor, see data sheet for filter selection based on sampling rate.
   net_ft_driver::ft_info input;
-  input.ip_address = "192.168.18.12";
+  input.ip_address = ft_ip;
   input.sensor_type = "ati_axia";
   input.rdt_sampling_rate = 2000;
   input.use_biasing = "true";
@@ -162,22 +163,16 @@ int main(int argc, char** argv) {
   std::thread spin_thread;
   rclcpp::init(argc, argv);
   rclcpp::executors::MultiThreadedExecutor executor;
-  SafeQueue<queue_package> transfer_package;
 
-  // 70 seconds at 1000hz
-  const int MAX_BUFFER_SIZE = 70000;
-  std::vector<queue_package> dump_vector(MAX_BUFFER_SIZE);
-  int dump_index = 0;
-  bool buffer_full = false;
+  Eigen::Affine3d pose;
+  std::mutex pose_mutex;
 
-  Eigen::Vector3d latest_goal;
-  std::mutex goal_mutex;
-  bool use_goal_point = false;
-  std::mutex use_goal_mutex;
+  Eigen::Affine3d partner_pose;
+  std::mutex partner_pose_mutex;
 
   try {
     // connect to robot
-    franka::Robot robot(config["robot_ip"]);
+    franka::Robot robot(config[config_name]["robot_ip"]);
     setDefaultBehavior(robot, 0.80);
 
     // First move the robot to a suitable joint configuration
@@ -195,7 +190,7 @@ int main(int argc, char** argv) {
     // equilibrium point is the initial position
     Eigen::Affine3d initial_transform(Eigen::Matrix4d::Map(initial_state.O_T_EE.data()));
     Eigen::Vector3d position_d(initial_transform.translation());
-    latest_goal = position_d;
+    partner_pose = initial_transform;
     Eigen::Quaterniond orientation_d(initial_transform.rotation());
     
     auto set_point_func_sim = [&](double) -> Eigen::Matrix<double, 6, 1> {
@@ -215,23 +210,6 @@ int main(int argc, char** argv) {
 
     };
 
-    Eigen::Matrix<double, 6, 1> x0_vec;
-    x0_vec << position_d, 0.0, 0.0, 0.0;
-
-    std::vector<Eigen::Matrix<double, 6, 1>> expected_pos;
-    std::vector<Eigen::Matrix<double, 6, 1>> expected_vel;
-    std::vector<Eigen::Matrix<double, 6, 1>> expected_accel;
-    trajectory_6d sim_traj = spring_simulate_6d(
-      x0_vec,
-      stiffness,
-      damping,
-      virtual_mass,
-      fext_func,
-      set_point_func_sim);
-
-    expected_pos = sim_traj.position;
-    expected_vel = sim_traj.velocity;
-    expected_accel = sim_traj.acceleration;
 
     // set collision behavior
     robot.setCollisionBehavior({{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
@@ -243,6 +221,9 @@ int main(int argc, char** argv) {
     std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
         impedance_control_callback = [&](const franka::RobotState& robot_state,
                                          franka::Duration duration) -> franka::Torques {
+
+
+
       // get state variables
       std::array<double, 7> coriolis_array = model.coriolis(robot_state);
       std::array<double, 7> gravity_array = model.gravity(robot_state);
@@ -254,8 +235,6 @@ int main(int argc, char** argv) {
       sensor.read();
       std::array<double, 6> ft_reading = sensor.ft_sensor_measurements_;
 
-      static int fullCount = 0;
-
       // convert to Eigen
       Eigen::Map<const Eigen::Matrix<double, 7, 1>> coriolis(coriolis_array.data());
       Eigen::Map<const Eigen::Matrix<double, 7, 1>> gravity(gravity_array.data());
@@ -266,15 +245,25 @@ int main(int argc, char** argv) {
       Eigen::Map<const Eigen::Matrix<double, 7, 1>> tau_J(robot_state.tau_J.data());
       Eigen::Map<const Eigen::Matrix<double, 7, 1>> tau_J_d(robot_state.tau_J_d.data());
       Eigen::Map<Eigen::Matrix<double, 6, 1>> sensor_fext_raw(ft_reading.data());
-      Eigen::Affine3d transform(Eigen::Matrix4d::Map(robot_state.O_T_EE.data()));
-      Eigen::Vector3d position(transform.translation());
-      Eigen::Quaterniond orientation(transform.rotation());
-      
-      // compute error to desired equilibrium pose
-      // position error
+      Eigen::Affine3d tmp_pose(Eigen::Matrix4d::Map(robot_state.O_T_EE.data()));
+
+      {
+        std::lock_guard<std::mutex> lock(pose_mutex);
+        pose = tmp_pose;
+      }
+
+      Eigen::Affine3d partner_pose_local;
+      {
+        std::lock_guard<std::mutex> lock(partner_pose_mutex);
+        partner_pose_local = partner_pose;
+      }
+
+      Eigen::Vector3d position(pose.translation());
+      Eigen::Quaterniond orientation(pose.rotation());
+
       Eigen::Matrix<double, 6, 1> error;
       error.head(3) << position - position_d;
-      
+
       // orientation error
       // "difference" quaternion
       if (orientation_d.coeffs().dot(orientation.coeffs()) < 0.0) {
@@ -285,11 +274,11 @@ int main(int argc, char** argv) {
       Eigen::Quaterniond error_quaternion(orientation.inverse() * orientation_d);
       error.tail(3) << error_quaternion.x(), error_quaternion.y(), error_quaternion.z();
       // Transform to base frame
-      error.tail(3) << -transform.rotation() * error.tail(3);
+      error.tail(3) << -pose.rotation() * error.tail(3);
 
       // axis angle representation for use in boundaries and logging (in base frame)
       Eigen::AngleAxisd angle_axis(error_quaternion);
-      Eigen::Vector3d orientation_error_axis_angle = -transform.rotation() * (angle_axis.angle() * angle_axis.axis());
+      Eigen::Vector3d orientation_error_axis_angle = -pose.rotation() * (angle_axis.angle() * angle_axis.axis());
       
       Eigen::VectorXd position_6d(6);
       position_6d << position, orientation_error_axis_angle;
@@ -301,18 +290,14 @@ int main(int argc, char** argv) {
       Eigen::Matrix<double, 6, 7> djacobian;
       Eigen::VectorXd velocity;
       Eigen::VectorXd velocity_raw;
-      Eigen::VectorXd accel;
-      Eigen::VectorXd accel_raw;
       // arbitrary cutoff for no duration, expected duration is 0.001
       if (duration.toSec() < 0.00000001) {
         djacobian.setZero();
         velocity.setZero(6);
-        accel.setZero(6);
       } else {
-        djacobian = (jacobian - old_jacobian)/duration.toSec();
-        velocity_raw = (position_6d - old_position)/duration.toSec();
+        djacobian = (jacobian - old_jacobian) / duration.toSec();
+        velocity_raw = (position_6d - old_position) / duration.toSec();
         velocity = alpha * velocity_raw + (1.0 - alpha) * old_velocity;
-        accel = (velocity - old_velocity)/duration.toSec();
       }
 
       // non static update
@@ -331,19 +316,23 @@ int main(int argc, char** argv) {
       Eigen::Matrix<double, 6, 1> gravity_wrench {0.0, 0.0, -gravity_comp, 0.0, 0.0, 0.0};
       Eigen::MatrixXd base_ee_adjoint(6, 6);
       base_ee_adjoint.setZero();
-      base_ee_adjoint.topLeftCorner(3, 3) << transform.rotation();
-      base_ee_adjoint.bottomRightCorner(3,3) << transform.rotation();
+      base_ee_adjoint.topLeftCorner(3, 3) << pose.rotation();
+      base_ee_adjoint.bottomRightCorner(3,3) << pose.rotation();
       Eigen::Matrix<double, 6, 1> ee_gravity = base_ee_adjoint.transpose() * gravity_wrench;
       ee_fext(0) = ee_fext(0) - ee_gravity(0);
       ee_fext(1) = ee_fext(1) - ee_gravity(1);
       // add gravity comp back to account for sensor bias
       ee_fext(2) = ee_fext(2) - ee_gravity(2) + gravity_comp;
 
+
+      // Eigen::Matrix<double, 6, 1> bilateral_ee_fext = bilateral_coupling();
+
+
       // translate gravity compensated wrench at EE to base frame to express acceleration in cartesian space.
       Eigen::MatrixXd ee_base_adjoint(6, 6);
       ee_base_adjoint.setZero();
-      ee_base_adjoint.topLeftCorner(3, 3) << transform.rotation().transpose();
-      ee_base_adjoint.bottomRightCorner(3,3) << transform.rotation().transpose();
+      ee_base_adjoint.topLeftCorner(3, 3) << pose.rotation().transpose();
+      ee_base_adjoint.bottomRightCorner(3,3) << pose.rotation().transpose();
       Eigen::Matrix<double, 6, 1> base_fext = ee_base_adjoint.transpose() * ee_fext;
 
       // Clamp fext to help prevent off-phase run away
@@ -357,25 +346,14 @@ int main(int argc, char** argv) {
         base_fext(4) = -base_fext(4);
         base_fext(5) = -base_fext(5);
       }
-      if (use_dummy_force) {
-        base_fext = fext_func(fullCount/1000.0);
-        std::cout << "Time: " << fullCount/1000.0 << std::endl;
-      }
 
       //precompute velocity from jacobian for reuse
-      Eigen::Matrix<double, 6, 1> jac_vel = jacobian * dq;
+      Eigen::Matrix<double, 6, 1> spatial_velocity = jacobian * dq;
 
       // compute control MR 11.66
       Eigen::VectorXd ddx_d(6);
-      ddx_d << virtual_mass.inverse() * (base_fext - (damping * jac_vel) - (stiffness * error));
+      ddx_d << virtual_mass.inverse() * (base_fext - (damping * spatial_velocity) - (stiffness * error));
 
-      // follow ergodic goals
-      Eigen::Vector3d ergodic_adjustment;
-      ergodic_adjustment.setZero();
-      if (use_ergodic_force && use_goal_point) {
-        ergodic_adjustment = ergodic_gains * (position - latest_goal);
-        ddx_d.head(3) -= ergodic_adjustment;
-      }
 
       // compute boundry acceleration to keep EE in bounds
       if (use_boundry) {
@@ -387,10 +365,10 @@ int main(int argc, char** argv) {
         ddx_b.setZero();
         // if out of bounds anywhere, apply corrective force and damp user movement
         if ((correction.head(3).array().abs() > 0.001).any()) {
-            ddx_b.head(3) = -correction.head(3) * boundry_trans_stiffness - boundry_trans_damping * jac_vel.head(3);
+            ddx_b.head(3) = -correction.head(3) * boundry_trans_stiffness - boundry_trans_damping * spatial_velocity.head(3);
         }
         if ((correction.tail(3).array().abs() > 0.001).any()) {
-            ddx_b.tail(3) = -correction.tail(3) * boundry_rot_stiffness - boundry_rot_damping * jac_vel.tail(3);
+            ddx_b.tail(3) = -correction.tail(3) * boundry_rot_stiffness - boundry_rot_damping * spatial_velocity.tail(3);
         }
 
         ddx_d += ddx_b;
@@ -444,49 +422,52 @@ int main(int argc, char** argv) {
       }
       last_task = tau_d;
 
+      // Bilateral coupling
+
+      //Pose = T^{O}_{EE_A}
+      //Partner_Pose = T^{O}_{EE_B}
+      //Difference = Pose^-1 * Partner_Pose = T^{EE_A}_{EE_B}
+
+      Eigen::Affine3d Trans_Error = pose.inverse() * partner_pose_local;
+
+      static Eigen::Matrix3d K_T = Eigen::Matrix3d::Identity() * bilateral_trans_stiffness;
+      static Eigen::Matrix3d K_R = Eigen::Matrix3d::Identity() * bilateral_rot_stiffness;
+
+      Eigen::Matrix<double, 6, 1>  bilateral_wrench;
+      bilateral_wrench.setZero();
+
+      Eigen::Vector3d bilateral_force = Trans_Error.linear().transpose() * K_T * Trans_Error.translation();
+
+      for (int i = 0; i<3; ++i){
+        bilateral_force(i) = std::clamp(bilateral_force(i), -force_limit, force_limit);
+      }
+      
+      // Normally the second K_R should be transposed, but as a diagonal matrix, it does not matter
+      Eigen::Matrix3d W = (K_R * Trans_Error.linear() - Trans_Error.linear().transpose() * K_R);
+
+      Eigen::Vector3d bilateral_torque(-W(1,2), W(0,2), -W(0,1));
+
+      for (int i = 0; i<3; ++i){
+        bilateral_torque(i) = std::clamp(bilateral_torque(i), -torque_limit, torque_limit);
+      }
+
+      bilateral_wrench.head(3) = bilateral_force;
+      bilateral_wrench.tail(3) = bilateral_torque;
+
+      Eigen::Matrix<double, 6, 1> base_bilateral =  ee_base_adjoint.transpose() * bilateral_wrench;
+
+      Eigen::VectorXd bilateral_tau(7);
+      bilateral_tau.setZero();
+      if(bilateral){
+        bilateral_tau = jacobian.transpose() * base_bilateral;
+      }
+      tau_d += bilateral_tau;
+
+
       // output format
       std::array<double, 7> tau_d_array;
       Eigen::Map<Eigen::Matrix<double, 7, 1>>(tau_d_array.data()) = tau_d;
       franka::Torques torques = tau_d_array;
-
-      // publish results
-      static int count = 0;
-      count++;
-      static Eigen::Matrix<double, 6, 1> predicted;
-      predicted << position_6d; 
-
-      if (expected_pos.size() > 0 && fullCount < (int)expected_pos.size() && config[config_name]["use_dummy_force"]) {
-        predicted = expected_pos[fullCount];
-      }
-      fullCount++;
-
-      if (count == 10) {
-        queue_package new_package;
-        new_package.desired_accel = ddx_d;
-        new_package.actual_wrench = base_fext;
-        new_package.ergodic_accel = ergodic_adjustment;
-        new_package.orientation_error = orientation_error_axis_angle;
-        new_package.translation = position;
-        new_package.translation_d = predicted.head(3);
-        new_package.velocity = velocity;
-        new_package.accel = accel;
-        new_package.torques_d = tau_d;
-        new_package.torques_o = tau_J_d;
-        new_package.torques_c = coriolis;
-        new_package.torques_g = tau_J - gravity;
-        new_package.torques_f = tau_friction;
-        new_package.ddq_d = ddq_d;
-        new_package.dq = dq;
-        if (ros2_publish == "TRUE") {
-          transfer_package.Produce(queue_package(new_package));
-        }
-
-        dump_vector[dump_index] = new_package;
-        dump_index = (dump_index + 1) % MAX_BUFFER_SIZE;
-        if (dump_index == 0) buffer_full = true;
-
-        count = 0;
-      }
 
       // if ctrl-c is pressed, robot should stop
       if (robot_stop) {
@@ -502,13 +483,12 @@ int main(int argc, char** argv) {
     std::cin.ignore();
     sensor.re_bias();
 
-    // data bridge through ROS2 setup
-    if (ros2_publish == "TRUE") {
-      auto node = std::make_shared<MinimalPublisher>(transfer_package, latest_goal, goal_mutex, use_goal_point, use_goal_mutex);
-      node->init();
-      executor.add_node(node);
-      spin_thread = std::thread([&executor, node]() { executor.spin(); });
-    }
+
+    auto node = std::make_shared<MinimalPublisher>(pose, pose_mutex, ns, partner_pose, partner_pose_mutex, partner_ns);
+    executor.add_node(node);
+    spin_thread = std::thread([&executor, node]() { executor.spin(); });
+
+  
     robot.control(impedance_control_callback);
   } catch (const franka::Exception& ex) {
     std::cout << "Franka Exception: " << ex.what() << std::endl;
@@ -519,10 +499,7 @@ int main(int argc, char** argv) {
   }
 
   rclcpp::shutdown();
-  if (ros2_publish == "TRUE") {
-    spin_thread.join();
-  }
-  robot_dump(dump_vector, buffer_full, MAX_BUFFER_SIZE, dump_index);
+  spin_thread.join();
   sensor.on_deactivate();
   return 0;
 }

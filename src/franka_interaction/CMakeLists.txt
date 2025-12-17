@@ -13,16 +13,17 @@ find_package(data_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # build ft sensor
 add_subdirectory(src/net_ft)
+
 
 # set up examples_utils library
 add_library(utilities STATIC
   src/utils/examples_common.cpp
   src/utils/traj_simulate.cpp
   src/utils/minimal_publisher.cpp
-  src/utils/data_dumper.cpp
   src/utils/butterworth.cpp
 )
 target_include_directories(utilities PUBLIC
@@ -40,6 +41,7 @@ ament_target_dependencies(utilities
   data_interfaces
   ament_index_cpp
   std_srvs
+  geometry_msgs
 )
 
 set(EXAMPLES

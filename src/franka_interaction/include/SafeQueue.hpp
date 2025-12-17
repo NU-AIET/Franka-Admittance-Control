@@ -12,21 +12,7 @@
 #include <eigen3/Eigen/Dense>
 
 struct queue_package {
-	Eigen::Matrix<double, 6, 1> desired_accel;
-	Eigen::Matrix<double, 6, 1> actual_wrench;
-	Eigen::Matrix<double, 3, 1> orientation_error;
-	Eigen::Vector3d translation;
-	Eigen::Vector3d translation_d;
-	Eigen::Vector3d ergodic_accel;
-	Eigen::VectorXd velocity;
-	Eigen::VectorXd accel;
-	Eigen::VectorXd torques_d;
-	Eigen::VectorXd torques_o;
-	Eigen::VectorXd torques_c;
-	Eigen::VectorXd torques_g;
-	Eigen::VectorXd torques_f;
-	Eigen::VectorXd ddq_d;
-	Eigen::VectorXd dq;
+	Eigen::Affine3d pose;
 };
 
 template<class T>
