@@ -6,6 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # find dependencies
+find_package(realtime_tools REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(Franka REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -42,6 +43,7 @@ ament_target_dependencies(utilities
   ament_index_cpp
   std_srvs
   geometry_msgs
+  realtime_tools
 )
 
 set(EXAMPLES

@@ -4,7 +4,7 @@
         "torque_smoothing": 100.0,
         "force_limit": 100,
         "torque_limit": 10,
-        "stiffness": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "stiffness": [0.0, 0.0, 0.0, 50.0, 50.0, 50.0],
         "damping": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
         "mass": [3.0, 3.0, 3.0, 1.0, 1.0, 1.0],
         "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
@@ -17,7 +17,7 @@
         },
         "use_boundry": true,
         "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
+            "min": [0.30, -0.25, 0.10, -1.0, -1.0, -1.57],
             "max": [0.70,  0.25, 0.80, 1.0, 1.0, 1.57],
             "trans_stiffness": 200.0,
             "trans_damping": 25.0,
@@ -33,15 +33,16 @@
         "ns" : "Alpha",
         "partner_ns" : "Beta",
         "bilateral_enable" : true,
-        "bilateral_trans_stiff": 100,
-        "bilateral_rot_stiff": 10
+        "bilateral_trans_stiff": -500,
+        "bilateral_rot_stiff": 0,
+	"ee_mass": 0.1005
     },
     "bilateral_b": {
-        "robot_ip": "panda1.robot",
+        "robot_ip": "192.168.18.61",
         "torque_smoothing": 100.0,
         "force_limit": 100,
         "torque_limit": 10,
-        "stiffness": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "stiffness": [0.0, 0.0, 0.0, 50.0, 50.0, 50.0],
         "damping": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
         "mass": [3.0, 3.0, 3.0, 1.0, 1.0, 1.0],
         "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
@@ -54,7 +55,7 @@
         },
         "use_boundry": true,
         "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
+            "min": [0.30, -0.25, 0.10, -1.0, -1.0, -1.57],
             "max": [0.70,  0.25, 0.80, 1.0, 1.0, 1.57],
             "trans_stiffness": 200.0,
             "trans_damping": 25.0,
@@ -66,11 +67,12 @@
             "max_velocity": [0.2, 0.3, 0.2, 0.5, 0.5, 0.5],
             "damping": [45.0, 45.0, 45.0, 2.0, 2.0, 2.0]
         },
-        "ft_ip": "192.168.18.12",
+        "ft_ip": "192.168.18.13",
         "ns" : "Beta",
         "partner_ns" : "Alpha",
         "bilateral_enable" : true,
-        "bilateral_trans_stiff": 100,
-        "bilateral_rot_stiff": 10
+        "bilateral_trans_stiff": -500,
+        "bilateral_rot_stiff": 0,
+	"ee_mass": 0.1521
     }
 }

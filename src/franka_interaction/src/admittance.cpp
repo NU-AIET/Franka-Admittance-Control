@@ -157,8 +157,12 @@ int main(int argc, char** argv) {
   sensor_ee_adjoint.bottomRightCorner(3,3) << sensor_rotation;
   sensor_ee_adjoint.bottomLeftCorner(3,3) << sensor_translation_skew * sensor_rotation;
 
-  double gravity_comp = 2.55;
-  
+  double ee_mass = config[config_name]["ee_mass"];
+  double gravity_comp = ee_mass *  9.81;
+
+  std::array<double, 3> payload_com{0.0, 0.0, 0.05};
+  std::array<double, 9> payload_inertia{0.0005, 0.0, 0.0, 0.0, 0.0005, 0.0, 0.0, 0.0, 0.0005};
+
   // thread-safe queue to transfer robot data to ROS
   std::thread spin_thread;
   rclcpp::init(argc, argv);
@@ -173,6 +177,7 @@ int main(int argc, char** argv) {
   try {
     // connect to robot
     franka::Robot robot(config[config_name]["robot_ip"]);
+    robot.automaticErrorRecovery();
     setDefaultBehavior(robot, 0.80);
 
     // First move the robot to a suitable joint configuration
@@ -184,6 +189,8 @@ int main(int argc, char** argv) {
 
     // load the kinematics and dynamics model
     franka::Model model = robot.loadModel();
+
+    robot.setLoad(ee_mass, payload_com, payload_inertia);
 
     franka::RobotState initial_state = robot.readOnce();
 
@@ -436,7 +443,8 @@ int main(int argc, char** argv) {
       Eigen::Matrix<double, 6, 1>  bilateral_wrench;
       bilateral_wrench.setZero();
 
-      Eigen::Vector3d bilateral_force = Trans_Error.linear().transpose() * K_T * Trans_Error.translation();
+      //Eigen::Vector3d bilateral_force = Trans_Error.linear().transpose() * K_T * Trans_Error.translation();
+      Eigen::Vector3d bilateral_force = -K_T * Trans_Error.translation();
 
       for (int i = 0; i<3; ++i){
         bilateral_force(i) = std::clamp(bilateral_force(i), -force_limit, force_limit);
@@ -467,6 +475,10 @@ int main(int argc, char** argv) {
       // output format
       std::array<double, 7> tau_d_array;
       Eigen::Map<Eigen::Matrix<double, 7, 1>>(tau_d_array.data()) = tau_d;
+      
+      // std::array<double, 7> tau_d_rate_limited =
+       //   franka::limitRate(franka::kMaxTorqueRate, tau_d_array, robot_state.tau_J_d);
+      
       franka::Torques torques = tau_d_array;
 
       // if ctrl-c is pressed, robot should stop
