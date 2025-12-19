@@ -1,19 +1,15 @@
 #include "minimal_publisher.hpp"
 
 MinimalPublisher::MinimalPublisher(
-    Eigen::Affine3d & pose,
-    std::mutex & pose_mutex,
+    affine_buffer & EE_buffer,
     std::string ns,
-    Eigen::Affine3d & partner_pose,
-    std::mutex & partner_pose_mutex,
+    affine_buffer & Mirror_buffer,
     std::string partner_ns)
 
 : Node("minimal_publisher"),
-  pose_(pose),
-  pose_mutex_(pose_mutex),
+  EE_buffer_(EE_buffer),
   ns_(ns),
-  partner_pose_(partner_pose),
-  partner_pose_mutex_(partner_pose_mutex),
+  Mirror_buffer_(Mirror_buffer),
   partner_ns_(partner_ns)
 {
   pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/"+ns_+"/pose", 1000);
@@ -21,22 +17,24 @@ MinimalPublisher::MinimalPublisher(
   partner_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
   "/"+partner_ns_+"/pose", 1000,
   [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-    std::lock_guard<std::mutex> lock(partner_pose_mutex_);
-    partner_pose_.linear() = Eigen::Quaterniond(msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z, msg->pose.orientation.w).toRotationMatrix();
-    partner_pose_.translation() = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    int next = 1 - Mirror_buffer_.active.load(std::memory_order_relaxed);
+    Mirror_buffer_.affines[next].linear() = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z).toRotationMatrix();
+    Mirror_buffer_.affines[next].translation() = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    Mirror_buffer_.active.store(next, std::memory_order_release);
   }
   );
 
 
   auto timer_callback = [this]() -> void {
-    std::lock_guard<std::mutex> lock(pose_mutex_);
+    int idx = EE_buffer_.active.load(std::memory_order_acquire);
+    Eigen::Affine3d pose = EE_buffer_.affines[idx];
     auto msg = geometry_msgs::msg::PoseStamped();
     msg.header.stamp = get_clock()->now();
-    msg.pose.position.x = pose_.translation()(0);
-    msg.pose.position.y = pose_.translation()(1);
-    msg.pose.position.z = pose_.translation()(2);
+    msg.pose.position.x = pose.translation()(0);
+    msg.pose.position.y = pose.translation()(1);
+    msg.pose.position.z = pose.translation()(2);
 
-    Eigen::Matrix3d R = pose_.linear();
+    Eigen::Matrix3d R = pose.linear();
 
     Eigen::Quaterniond q(R);
 

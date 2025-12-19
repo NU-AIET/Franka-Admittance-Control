@@ -6,16 +6,20 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include <string>
 #include <eigen3/Eigen/Dense>
+#include <atomic>
+
+struct affine_buffer{
+  std::array<Eigen::Affine3d, 2> affines;
+  std::atomic<int> active{0};
+};
 
 class MinimalPublisher : public rclcpp::Node
 {
 public:
   explicit MinimalPublisher(
-    Eigen::Affine3d & pose,
-    std::mutex & pose_mutex,
+    affine_buffer & EE_buffer,
     std::string ns,
-    Eigen::Affine3d & partner_pose,
-    std::mutex & partner_pose_mutex,
+    affine_buffer & Mirror_buffer,
     std::string partner_ns);
   void init();
 
@@ -24,11 +28,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr partner_pose_sub_;
 
-  Eigen::Affine3d & pose_;
-  std::mutex & pose_mutex_;
+  affine_buffer & EE_buffer_;
   std::string ns_;
   
-  Eigen::Affine3d & partner_pose_;
-  std::mutex & partner_pose_mutex_;
+  affine_buffer & Mirror_buffer_;
   std::string partner_ns_;
 };
