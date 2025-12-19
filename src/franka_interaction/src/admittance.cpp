@@ -81,6 +81,26 @@ void Adjoint(Matrix6d & Ad, const Eigen::Affine3d & T)
   return;
 }
 
+
+struct vec_buffer {
+    std::array<std::array<double, 6>,2> ft_readings{};
+    std::atomic<int> active{0};
+};
+
+vec_buffer ft_buffer{};
+std::atomic<bool> ft_running(true);
+
+net_ft_driver::NetFtHardwareInterface sensor;
+
+void ft_read(){
+  while(ft_running){
+    sensor.read();
+    int next = 1 - ft_buffer.active.load(std::memory_order_relaxed);
+    ft_buffer.ft_readings[next] = sensor.ft_sensor_measurements_;
+    ft_buffer.active.store(next, std::memory_order_release);
+  }
+}
+
 /**
  * An admittance controller designed to interface with a Axia M8 F/T sensor at the wrist. Bounding boxes,
  * velocity limits, and control parameters can be configured in the configuration named when the contoller
@@ -172,6 +192,10 @@ int main(int argc, char** argv) {
   const double bilateral_trans_stiffness = config[config_name]["bilateral_trans_stiff"];
   const double bilateral_rot_stiffness = config[config_name]["bilateral_rot_stiff"];
 
+  std::array<double, 6> bilateral_damping_vec = config[config_name]["bilateral_damping"];
+  Vector6d bilateral_damping = Eigen::Map<Vector6d>(bilateral_damping_vec.data());
+  const Matrix6d bilateral_C = bilateral_damping.asDiagonal();
+
   const Eigen::Matrix3d K_T = Eigen::Matrix3d::Identity() * bilateral_trans_stiffness;
   const Eigen::Matrix3d K_R = Eigen::Matrix3d::Identity() * bilateral_rot_stiffness;
 
@@ -182,7 +206,7 @@ int main(int argc, char** argv) {
   input.rdt_sampling_rate = 2000;
   input.use_biasing = "true";
   input.internal_filter_rate = 5;
-  net_ft_driver::NetFtHardwareInterface sensor = net_ft_driver::NetFtHardwareInterface(input);
+  sensor = net_ft_driver::NetFtHardwareInterface(input);
 
   // setup sensor transform
   Eigen::Matrix<double, 3, 3> sensor_rotation;
@@ -203,16 +227,6 @@ int main(int argc, char** argv) {
   Matrix6d Adjoint_EE_to_Sensor = Matrix6d::Zero();
   Adjoint(Adjoint_EE_to_Sensor, EE_to_Sensor);
 
-  // Eigen::Matrix3d sensor_translation_skew;
-  // sensor_translation_skew <<     0,                          -sensor_translation.z(),  sensor_translation.y(),
-  //                                sensor_translation.z(),     0,                        -sensor_translation.x(),
-  //                                -sensor_translation.y(),    sensor_translation.x(),   0;
-  // Adjoint_Sensor_to_EE.setZero();
-  // Adjoint_Sensor_to_EE.topLeftCorner(3, 3) << sensor_rotation;
-  // Adjoint_Sensor_to_EE.bottomRightCorner(3,3) << sensor_rotation;
-  // Adjoint_Sensor_to_EE.bottomLeftCorner(3,3) << sensor_translation_skew * sensor_rotation;
-  
-
   double load_mass = config[config_name]["load_mass"];
   double load_weight = load_mass * 9.81;
 
@@ -228,8 +242,16 @@ int main(int argc, char** argv) {
 
   Eigen::Affine3d EE_to_Load = Load_to_EE.inverse();
 
+  Eigen::Affine3d Handle_to_EE;
+
+  Handle_to_EE.translation() = Eigen::Vector3d{0.0, 0.0, 0.1};
+  Handle_to_EE.linear() = Eigen::Matrix3d::Identity();
+
+  Eigen::Affine3d Handle_to_World;
+
   // thread-safe queue to transfer robot data to ROS
-  std::thread spin_thread;
+  std::thread ros_thread;
+  std::thread ft_thread;
   rclcpp::init(argc, argv);
   rclcpp::executors::MultiThreadedExecutor executor;
 
@@ -238,6 +260,9 @@ int main(int argc, char** argv) {
 
   Eigen::Affine3d Mirror_to_World;
   affine_buffer Mirror_buffer;
+
+  Vector6d_buffer Mirror_twist_buffer;
+  Vector6d_buffer EE_twist_buffer;
 
   try {
     // connect to robot
@@ -262,13 +287,15 @@ int main(int argc, char** argv) {
     // equilibrium point is the initial position
     const Eigen::Affine3d EE_to_World_Original(Eigen::Matrix4d::Map(initial_state.O_T_EE.data()));
     Eigen::Vector3d position_d(EE_to_World_Original.translation());
-    Mirror_buffer.affines[0] = EE_to_World_Original;
-    Mirror_buffer.affines[1] = EE_to_World_Original;
-    Mirror_to_World = EE_to_World_Original;
+    Mirror_buffer.affines[0] = EE_to_World_Original * Handle_to_EE;
+    Mirror_buffer.affines[1] = EE_to_World_Original * Handle_to_EE;
+    Mirror_to_World = EE_to_World_Original * Handle_to_EE;
 
-    EE_buffer.affines[0] = EE_to_World_Original;
-    EE_buffer.affines[1] = EE_to_World_Original;
+    EE_buffer.affines[0] = EE_to_World_Original * Handle_to_EE;
+    EE_buffer.affines[1] = EE_to_World_Original * Handle_to_EE;
     EE_to_World = EE_to_World_Original;
+
+    Handle_to_World = EE_to_World * Handle_to_EE;
 
     Eigen::Quaterniond orientation_d(EE_to_World_Original.rotation());
 
@@ -292,6 +319,7 @@ int main(int argc, char** argv) {
 
     Vector6d spatial_velocity_raw = Vector6d::Zero();
     Vector6d spatial_velocity = Vector6d::Zero();
+    Vector6d Mirror_velocity = Vector6d::Zero();
     Vector6d old_spatial_velocity = Vector6d::Zero();
 
     Eigen::Vector3d position = Eigen::Vector3d::Zero();
@@ -344,7 +372,14 @@ int main(int argc, char** argv) {
     std::array<double, 7> tau_d_array{};
 
 
+    Matrix6d A = Matrix6d::Zero();
+    Eigen::LLT<Matrix6d> llt;
+    Vector6d rhs = Vector6d::Zero();
+    Vector6d lhs = Vector6d::Zero();
+
     constexpr double alpha = 0.1;
+
+    
     
     // define callback for the torque control loop
 
@@ -363,8 +398,7 @@ int main(int argc, char** argv) {
       model_calculations.mass_array = model.mass(robot_state);
                       
       // update sensor data
-      sensor.read();
-      ft_reading = sensor.ft_sensor_measurements_;
+      ft_reading = ft_buffer.ft_readings[ft_buffer.active.load(std::memory_order_acquire)];
 
       // convert to Eigen
       Eigen::Map<const Vector7d> coriolis(model_calculations.coriolis_array.data());
@@ -382,8 +416,10 @@ int main(int argc, char** argv) {
       // Pose to end of J7 of Franka T_EE^O
       EE_to_World = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());
 
+      Handle_to_World = EE_to_World * Handle_to_EE;
+
       int next = 1 - EE_buffer.active.load(std::memory_order_relaxed);
-      EE_buffer.affines[next] = EE_to_World;
+      EE_buffer.affines[next] = Handle_to_World;
       EE_buffer.active.store(next, std::memory_order_release);
       Mirror_to_World = Mirror_buffer.affines[Mirror_buffer.active.load(std::memory_order_acquire)];
 
@@ -391,28 +427,27 @@ int main(int argc, char** argv) {
 
       Eigen::Quaterniond orientation(EE_to_World.rotation());
 
-      spatial_error.head(3) << position - position_d;
+      // spatial_error.head(3) << position - position_d;
 
-      // This isn't wrong yet, but why?
-      // orientation error
-      // "difference" quaternion
-      if (orientation_d.coeffs().dot(orientation.coeffs()) < 0.0) {
-        orientation.coeffs() << -orientation.coeffs();
-      }
+      // // This isn't wrong yet, but why?
+      // // orientation error
+      // // "difference" quaternion
+      // if (orientation_d.coeffs().dot(orientation.coeffs()) < 0.0) {
+      //   orientation.coeffs() << -orientation.coeffs();
+      // }
 
-      // This is wrong 
-      // "difference" quaternion for use in control
-      Eigen::Quaterniond error_quaternion(orientation.inverse() * orientation_d);
-      spatial_error.tail(3) << error_quaternion.x(), error_quaternion.y(), error_quaternion.z();
-      // Transform to base frame
-      spatial_error.tail(3) << -EE_to_World.rotation() * spatial_error.tail(3);
+      // // This is wrong 
+      // // "difference" quaternion for use in control
+      // Eigen::Quaterniond error_quaternion(orientation.inverse() * orientation_d);
+      // spatial_error.tail(3) << error_quaternion.x(), error_quaternion.y(), error_quaternion.z();
+      // // Transform to base frame
+      // spatial_error.tail(3) << -EE_to_World.rotation() * spatial_error.tail(3);
 
-      // axis angle representation for use in boundaries and logging (in base frame)
-      Eigen::AngleAxisd angle_axis(error_quaternion);
-      Eigen::Vector3d orientation_error_axis_angle = -EE_to_World.rotation() * (angle_axis.angle() * angle_axis.axis());
+      // // axis angle representation for use in boundaries and logging (in base frame)
+      // Eigen::AngleAxisd angle_axis(error_quaternion);
+      // Eigen::Vector3d orientation_error_axis_angle = -EE_to_World.rotation() * (angle_axis.angle() * angle_axis.axis());
       
-      spatial_position << position, orientation_error_axis_angle;
-
+      spatial_position.head(3) = position;
 
       // static Vector6d old_spatial_position = spatial_position;
       
@@ -454,7 +489,12 @@ int main(int argc, char** argv) {
 
       //precompute velocity from jacobian for reuse
       // This is a world aligned twist located at EE
-      spatial_velocity = spatial_jacobian * dq;
+      spatial_velocity.noalias()  = spatial_jacobian * dq;
+
+      int next_vel = 1 - EE_twist_buffer.active.load(std::memory_order_relaxed);
+      EE_twist_buffer.vectors[next_vel] = spatial_velocity;
+      EE_twist_buffer.active.store(next_vel, std::memory_order_release);
+      Mirror_velocity = Mirror_twist_buffer.vectors[Mirror_twist_buffer.active.load(std::memory_order_acquire)];
 
       damping_wrench_EW.noalias() = damping * spatial_velocity;
 
@@ -483,16 +523,16 @@ int main(int argc, char** argv) {
 
       // compute boundry acceleration to keep EE in bounds
       if (use_boundry) {
-        boundary_correction = (spatial_position - boundry_max).cwiseMax(0.0) + (spatial_position - boundry_min).cwiseMin(0.0);
+        boundary_correction.noalias()  = (spatial_position - boundry_max).cwiseMax(0.0) + (spatial_position - boundry_min).cwiseMin(0.0);
 
 
         boundary_decel.setZero();
         // if out of bounds anywhere, apply corrective force and damp user movement
         if ((boundary_correction.head(3).array().abs() > 0.001).any()) {
-            boundary_decel.head(3) = -boundary_correction.head(3) * boundry_trans_stiffness - boundry_trans_damping * spatial_velocity.head(3);
+            boundary_decel.head(3).noalias()  = -boundary_correction.head(3) * boundry_trans_stiffness - boundry_trans_damping * spatial_velocity.head(3);
         }
         if ((boundary_correction.tail(3).array().abs() > 0.001).any()) {
-            boundary_decel.tail(3) = -boundary_correction.tail(3) * boundry_rot_stiffness - boundry_rot_damping * spatial_velocity.tail(3);
+            boundary_decel.tail(3).noalias()  = -boundary_correction.tail(3) * boundry_rot_stiffness - boundry_rot_damping * spatial_velocity.tail(3);
         }
 
         spatial_accel_d += boundary_decel;
@@ -507,10 +547,14 @@ int main(int argc, char** argv) {
       }
 
       // MR 6.7 weighted pseudoinverse
-      J_inv_weighted = W_inv * spatial_jacobian.transpose() * (spatial_jacobian * W_inv * spatial_jacobian.transpose()).inverse();
-      
+      A.noalias()  = (spatial_jacobian * W_inv * spatial_jacobian.transpose());
+
+      llt = Eigen::LLT<Matrix6d>(A);
+
+      rhs.noalias()= (spatial_accel_d - (djacobian * dq));
+      lhs = llt.solve(rhs);
       // translate EE accel to joint accel MR 11.66
-      ddq_d.noalias() = J_inv_weighted * (spatial_accel_d - (djacobian * dq));
+      ddq_d.noalias() = W_inv * spatial_jacobian.transpose() * lhs;
       
       // MR 8.1 : inverse dynamics, add all control elements together
       tau_d.noalias() = (mass * ddq_d) + coriolis;
@@ -519,7 +563,7 @@ int main(int argc, char** argv) {
         dq_smooth_sign= dq.array() / (dq.array().square() + coulomb_epsilon * coulomb_epsilon).sqrt();
 
         // total friction comp
-        friction_comp_tau =  coulomb_frictions.cwiseProduct(dq_smooth_sign) + viscous_frictions.cwiseProduct(dq);
+        friction_comp_tau.noalias()  =  coulomb_frictions.cwiseProduct(dq_smooth_sign) + viscous_frictions.cwiseProduct(dq);
         tau_d += friction_comp_tau;
       }
 
@@ -529,9 +573,9 @@ int main(int argc, char** argv) {
       //Partner_Pose = T^{O}_{EE_B}
       //Difference = Pose^-1 * Partner_Pose = T^{EE_A}_{EE_B}
 
-      bilateral_error = Mirror_to_World.inverse() * EE_to_World;
+      bilateral_error = Mirror_to_World.inverse() * Handle_to_World;
 
-      bilateral_force_EE = -bilateral_error.rotation().transpose() * K_T * bilateral_error.translation();
+      bilateral_force_EE.noalias()  = -bilateral_error.rotation().transpose() * K_T * bilateral_error.translation();
       // bilateral_force_EE = K_T * bilateral_error.translation();
 
       for (int i = 0; i<3; ++i){
@@ -539,7 +583,7 @@ int main(int argc, char** argv) {
       }
       
       // Normally the second K_R should be transposed, but as a diagonal matrix, it does not matter
-      bilateral_skew_EE = -(K_R * bilateral_error.rotation() - bilateral_error.rotation().transpose() * K_R);
+      bilateral_skew_EE.noalias()  = -(K_R * bilateral_error.rotation() - bilateral_error.rotation().transpose() * K_R);
 
       Skew2Vec(bilateral_torque_EE, bilateral_skew_EE);
 
@@ -550,9 +594,11 @@ int main(int argc, char** argv) {
       bilateral_wrench_EW.head(3) = EE_to_World.rotation() * bilateral_force_EE;
       bilateral_wrench_EW.tail(3) = EE_to_World.rotation() * bilateral_torque_EE;
 
+      bilateral_wrench_EW += bilateral_C * (Mirror_velocity - spatial_velocity);
+
 
       if(bilateral){
-        bilateral_tau = spatial_jacobian.transpose() * bilateral_wrench_EW;
+        bilateral_tau.noalias()  = spatial_jacobian.transpose() * bilateral_wrench_EW;
         tau_d += bilateral_tau;
       }
 
@@ -579,9 +625,12 @@ int main(int argc, char** argv) {
     std::cin.ignore();
     sensor.re_bias();
 
-    auto node = std::make_shared<MinimalPublisher>(EE_buffer, ns, Mirror_buffer, partner_ns);
+    auto node = std::make_shared<MinimalPublisher>(EE_buffer, EE_twist_buffer, ns, Mirror_buffer, Mirror_twist_buffer, partner_ns);
     executor.add_node(node);
-    spin_thread = std::thread([&executor, node]() { executor.spin(); });
+    ros_thread = std::thread([&executor, node]() { executor.spin(); });
+
+    ft_thread = std::thread(ft_read);
+
   
     robot.control(impedance_control_callback);
   } catch (const franka::Exception& ex) {
@@ -592,8 +641,11 @@ int main(int argc, char** argv) {
       std::cerr << "Unknown exception caught." << std::endl;
   }
 
+  ft_running = false;
+
   rclcpp::shutdown();
-  spin_thread.join();
+  ros_thread.join();
+  ft_thread.join();
   sensor.on_deactivate();
   return 0;
 }

@@ -52,6 +52,8 @@ public:
   NET_FT_DRIVER_PUBLIC
   NetFtHardwareInterface(const ft_info& info);
 
+  NetFtHardwareInterface() = default;
+
   // NET_FT_DRIVER_PUBLIC
   // std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
 
