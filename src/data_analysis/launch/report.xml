@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<launch>
-  <node pkg="data_analysis" exec="position_tracking"/>
-  <node pkg="data_analysis" exec="torque_tracking"/>
-</launch>

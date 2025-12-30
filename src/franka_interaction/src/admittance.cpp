@@ -10,7 +10,6 @@
 #include <csignal>
 #include <fstream>
 #include <atomic>
-
 #include <eigen3/Eigen/Dense>
 
 #include <franka/duration.h>
@@ -109,14 +108,16 @@ void ft_read(){
  * @warning collision thresholds are set to high values. Make sure you have the user stop at hand!
  */
 int main(int argc, char** argv) {
+
   std::signal(SIGINT, signal_handler);
+
   // Check whether the required arguments were passed
-  if (argc != 3) {
-    std::cerr << "Usage: " << argv[0] << " <config-name>" << " <publish?>"<< std::endl;
+  if (argc != 2) {
+    std::cerr << "Usage: " << argv[0] << " <config-name>" << std::endl;
     return -1;
   }
+
   std::string config_name{argv[1]};
-  std::string ros2_publish{argv[2]};
 
   std::string package_share_dir = ament_index_cpp::get_package_share_directory("franka_interaction");
   std::string config_path = package_share_dir + "/config/config.json";
@@ -126,50 +127,51 @@ int main(int argc, char** argv) {
 
   //how fast the torque is allowed to change
   const double torque_smoothing = config[config_name]["torque_smoothing"];
-  const double max_torque_change = torque_smoothing / 1000.0;
+  const double max_torque_change = std::min(torque_smoothing, 1000.0) / 1000.0;
 
   double force_limit = config[config_name]["force_limit"];
   double torque_limit = config[config_name]["torque_limit"];
 
   bool swap_torque = config[config_name]["swap_torque"];
 
-  //stiffness
-  std::vector<double> stiffness_values = config[config_name]["stiffness"];
-  Vector6d stiffness_vec = Eigen::Map<Vector6d>(stiffness_values.data(), stiffness_values.size());
-  Matrix6d stiffness = stiffness_vec.asDiagonal();
+  //Virtual Stiffness
+  std::array<double, 6> stiffness_values = config[config_name]["stiffness"];
+  Vector6d stiffness_vec = Eigen::Map<Vector6d>(stiffness_values.data());
+  const Matrix6d stiffness = stiffness_vec.asDiagonal();
 
-  //damping
-  std::vector<double> damping_values = config[config_name]["damping"];
-  Vector6d damping_vec = Eigen::Map<Vector6d>(damping_values.data(), damping_values.size());
-  Matrix6d damping = damping_vec.asDiagonal();
+  //Virtual Damping
+  std::array<double, 6> damping_values = config[config_name]["damping"];
+  Vector6d damping_vec = Eigen::Map<Vector6d>(damping_values.data());
+  const Matrix6d damping = damping_vec.asDiagonal();
 
   //mass matrix
-  std::vector<double> mass_values = config[config_name]["mass"];
-  Vector6d mass_vec = Eigen::Map<Vector6d>(mass_values.data(), mass_values.size());
+  std::array<double, 6> mass_values = config[config_name]["mass"];
+  Vector6d mass_vec = Eigen::Map<Vector6d>(mass_values.data());
   Matrix6d virtual_mass = mass_vec.asDiagonal();
   const Matrix6d M_v_inv = virtual_mass.inverse();
 
   //joint weights
-  std::vector<double> weight_values = config[config_name]["joint_weight"];
-  Vector7d joint_weights = Eigen::Map<Vector7d>(weight_values.data(), weight_values.size());
+  std::array<double, 7> weight_values = config[config_name]["joint_weight"];
+  Vector7d joint_weights = Eigen::Map<Vector7d>(weight_values.data());
   const Matrix7d W_inv = joint_weights.asDiagonal().inverse();
 
   //friction comp
   bool use_friction_comp = config[config_name]["use_friction_comp"];
   double coulomb_epsilon = config[config_name]["friction_comp"]["friction_sign_epsilon"];
-  std::vector<double> coulomb_values = config[config_name]["friction_comp"]["friction_coulomb"];
-  Vector7d coulomb_frictions = Eigen::Map<Vector7d>(coulomb_values.data(), coulomb_values.size());
-  std::vector<double> viscous_values = config[config_name]["friction_comp"]["friction_viscous"];
-  Vector7d viscous_frictions = Eigen::Map<Vector7d>(viscous_values.data(), viscous_values.size());
+  std::array<double, 7> coulomb_values = config[config_name]["friction_comp"]["friction_coulomb"];
+  Vector7d coulomb_frictions = Eigen::Map<Vector7d>(coulomb_values.data());
+
+  std::array<double, 7> viscous_values = config[config_name]["friction_comp"]["friction_viscous"];
+  Vector7d viscous_frictions = Eigen::Map<Vector7d>(viscous_values.data());
 
   //boundry conditions
   bool use_boundry = config[config_name]["use_boundry"];
 
-  std::vector<double> boundry_min_values = config[config_name]["boundry"]["min"];
-  Vector6d boundry_min = Eigen::Map<Vector6d>(boundry_min_values.data(), boundry_min_values.size());
+  std::array<double, 6> boundry_min_values = config[config_name]["boundry"]["min"];
+  Vector6d boundry_min = Eigen::Map<Vector6d>(boundry_min_values.data());
 
-  std::vector<double> boundry_max_values = config[config_name]["boundry"]["max"];
-  Vector6d boundry_max = Eigen::Map<Vector6d>(boundry_max_values.data(), boundry_max_values.size());
+  std::array<double, 6> boundry_max_values = config[config_name]["boundry"]["max"];
+  Vector6d boundry_max = Eigen::Map<Vector6d>(boundry_max_values.data());
 
   double boundry_trans_stiffness = config[config_name]["boundry"]["trans_stiffness"];
   double boundry_rot_stiffness = config[config_name]["boundry"]["rot_stiffness"];
@@ -178,11 +180,11 @@ int main(int argc, char** argv) {
 
   //velocity limits
   bool use_velocity_max = config[config_name]["use_velocity_max"];
-  std::vector<double> velocity_max_values = config[config_name]["velocity_max"]["max_velocity"];
-  Vector6d velocity_max = Eigen::Map<Vector6d>(velocity_max_values.data(), velocity_max_values.size());
+  std::array<double, 6> velocity_max_values = config[config_name]["velocity_max"]["max_velocity"];
+  Vector6d velocity_max = Eigen::Map<Vector6d>(velocity_max_values.data());
 
-  std::vector<double> velocity_max_damping_values = config[config_name]["velocity_max"]["damping"];
-  Vector6d velocity_max_damping = Eigen::Map<Vector6d>(velocity_max_damping_values.data(), velocity_max_damping_values.size());
+  std::array<double, 6> velocity_max_damping_values = config[config_name]["velocity_max"]["damping"];
+  Vector6d velocity_max_damping = Eigen::Map<Vector6d>(velocity_max_damping_values.data());
 
   const std::string ft_ip = config[config_name]["ft_ip"];
   const std::string ns = config[config_name]["ns"];
@@ -216,7 +218,6 @@ int main(int argc, char** argv) {
                       0,                0,                1;
   
   // shifted down in sensor frame (up to the user)
-  // Double check?
   // Luke this is right, stop changing it 
   Eigen::Vector3d sensor_translation {0.0, 0.0, -0.0424};
   Eigen::Affine3d EE_to_Sensor;
@@ -264,14 +265,21 @@ int main(int argc, char** argv) {
   Vector6d_buffer Mirror_twist_buffer;
   Vector6d_buffer EE_twist_buffer;
 
+
+  constexpr int max_index = 100000;
+  int index = 0;
+  std::array<int, max_index> elapsed_time_;
+
   try {
     // connect to robot
     franka::Robot robot(config[config_name]["robot_ip"]);
+
+    // Let it clear errors before we start 
     robot.automaticErrorRecovery();
     setDefaultBehavior(robot, 0.80);
 
     // First move the robot to a suitable joint configuration
-    std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
+    const std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
     MotionGenerator motion_generator(0.5, q_goal);
 
     robot.control(motion_generator);
@@ -287,6 +295,9 @@ int main(int argc, char** argv) {
     // equilibrium point is the initial position
     const Eigen::Affine3d EE_to_World_Original(Eigen::Matrix4d::Map(initial_state.O_T_EE.data()));
     Eigen::Vector3d position_d(EE_to_World_Original.translation());
+
+    //Pre-fill buffers for smooth start
+
     Mirror_buffer.affines[0] = EE_to_World_Original * Handle_to_EE;
     Mirror_buffer.affines[1] = EE_to_World_Original * Handle_to_EE;
     Mirror_to_World = EE_to_World_Original * Handle_to_EE;
@@ -371,7 +382,6 @@ int main(int argc, char** argv) {
 
     std::array<double, 7> tau_d_array{};
 
-
     Matrix6d A = Matrix6d::Zero();
     Eigen::LLT<Matrix6d> llt;
     Vector6d rhs = Vector6d::Zero();
@@ -379,10 +389,7 @@ int main(int argc, char** argv) {
 
     constexpr double alpha = 0.1;
 
-    
-    
-    // define callback for the torque control loop
-
+    // HARD REAL TIME THREAD 
     //=============================================================//
     //                        CONTROL
     //                        FUNCTION
@@ -391,9 +398,11 @@ int main(int argc, char** argv) {
     std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
         impedance_control_callback = [&](const franka::RobotState& robot_state,
                                          franka::Duration duration) -> franka::Torques {
+
+      // auto start = std::chrono::high_resolution_clock::now();
       // get state variables
-      model_calculations.coriolis_array = model.coriolis(robot_state);
-      model_calculations.gravity_array = model.gravity(robot_state);
+      // model_calculations.coriolis_array = model.coriolis(robot_state);
+      // model_calculations.gravity_array = model.gravity(robot_state);
       model_calculations.jacobian_array = model.zeroJacobian(franka::Frame::kEndEffector, robot_state);
       model_calculations.mass_array = model.mass(robot_state);
                       
@@ -401,8 +410,8 @@ int main(int argc, char** argv) {
       ft_reading = ft_buffer.ft_readings[ft_buffer.active.load(std::memory_order_acquire)];
 
       // convert to Eigen
-      Eigen::Map<const Vector7d> coriolis(model_calculations.coriolis_array.data());
-      Eigen::Map<const Vector7d> gravity(model_calculations.gravity_array.data());
+      // Eigen::Map<const Vector7d> coriolis(model_calculations.coriolis_array.data());
+      // Eigen::Map<const Vector7d> gravity(model_calculations.gravity_array.data());
       Eigen::Map<const Eigen::Matrix<double, 6, 7>> spatial_jacobian(model_calculations.jacobian_array.data());
       Eigen::Map<const Matrix7d> mass(model_calculations.mass_array.data());
 
@@ -426,31 +435,13 @@ int main(int argc, char** argv) {
       position = EE_to_World.translation();
 
       Eigen::Quaterniond orientation(EE_to_World.rotation());
-
-      // spatial_error.head(3) << position - position_d;
-
-      // // This isn't wrong yet, but why?
-      // // orientation error
-      // // "difference" quaternion
-      // if (orientation_d.coeffs().dot(orientation.coeffs()) < 0.0) {
-      //   orientation.coeffs() << -orientation.coeffs();
-      // }
-
-      // // This is wrong 
-      // // "difference" quaternion for use in control
-      // Eigen::Quaterniond error_quaternion(orientation.inverse() * orientation_d);
-      // spatial_error.tail(3) << error_quaternion.x(), error_quaternion.y(), error_quaternion.z();
-      // // Transform to base frame
-      // spatial_error.tail(3) << -EE_to_World.rotation() * spatial_error.tail(3);
-
-      // // axis angle representation for use in boundaries and logging (in base frame)
-      // Eigen::AngleAxisd angle_axis(error_quaternion);
-      // Eigen::Vector3d orientation_error_axis_angle = -EE_to_World.rotation() * (angle_axis.angle() * angle_axis.axis());
       
       spatial_position.head(3) = position;
 
       // static Vector6d old_spatial_position = spatial_position;
-      
+
+
+      // Better filtering should probably be included
       // arbitrary cutoff for no duration, expected duration is 0.001
       if (duration.toSec() < 0.00000001) {
         djacobian.setZero();
@@ -460,10 +451,7 @@ int main(int argc, char** argv) {
         // spatial_velocity = alpha * spatial_velocity_raw + (1.0 - alpha) * old_spatial_velocity;
       }
 
-      // non static update
       old_spatial_jacobian = spatial_jacobian;
-      // old_spatial_velocity = spatial_velocity;
-      // old_spatial_position = spatial_position;
 
       // Potentially add Force-Torque filtering
 
@@ -480,7 +468,7 @@ int main(int argc, char** argv) {
       // Sensor biases weight out so we need to add it back in
       fexternal_wrench_EE(2) += load_weight; 
 
-      //We want to rotate this into a WORLD aligned frame located at the EE
+      // We want to rotate this into a WORLD aligned frame located at the EE
 
       // translate gravity compensated wrench at EE to base frame to express acceleration in cartesian space.
 
@@ -501,20 +489,21 @@ int main(int argc, char** argv) {
       // Maybe replace with a better error method / Bilateral Control
       // spring_wrench_EW.noalias() = stiffness * spatial_error;
 
+      if (swap_torque) {
+        fexternal_wrench_EW(3) = -fexternal_wrench_EW(3);
+        fexternal_wrench_EW(4) = -fexternal_wrench_EW(4);
+        fexternal_wrench_EW(5) = -fexternal_wrench_EW(5);
+      }
+
       fnet_wrench_EW = fexternal_wrench_EW - damping_wrench_EW - spring_wrench_EW;
 
       // Clamp fext to help prevent off-phase run away
       for(int i = 0; i <3; ++i) {
         fnet_wrench_EW(i) = std::clamp(fnet_wrench_EW(i), -force_limit, force_limit);
       }
+
       for(int i = 3; i <6; ++i) {
         fnet_wrench_EW(i) = std::clamp(fnet_wrench_EW(i), -torque_limit, torque_limit);
-      }
-
-      if (swap_torque) {
-        fnet_wrench_EW(3) = -fnet_wrench_EW(3);
-        fnet_wrench_EW(4) = -fnet_wrench_EW(4);
-        fnet_wrench_EW(5) = -fnet_wrench_EW(5);
       }
 
       // compute control MR 11.66 Virtual Dynamics 
@@ -557,7 +546,8 @@ int main(int argc, char** argv) {
       ddq_d.noalias() = W_inv * spatial_jacobian.transpose() * lhs;
       
       // MR 8.1 : inverse dynamics, add all control elements together
-      tau_d.noalias() = (mass * ddq_d) + coriolis;
+      ///TODO: !!! Check if coriolis term is needed or automatically added in???? !!!
+      tau_d.noalias() = (mass * ddq_d);
 
       if (use_friction_comp) {
         dq_smooth_sign= dq.array() / (dq.array().square() + coulomb_epsilon * coulomb_epsilon).sqrt();
@@ -602,7 +592,7 @@ int main(int argc, char** argv) {
         tau_d += bilateral_tau;
       }
 
-      //Spec sheet lists 1000/sec as maximum but in practice should be much lower for smooth human use.
+      // Spec sheet lists 1000/sec as maximum but in practice should be much lower for smooth human use.
       for (int i = 0; i < tau_d.size(); ++i) {
         tau_d(i) = std::clamp(tau_d(i), old_tau_d(i) - max_torque_change, old_tau_d(i) + max_torque_change);
       }
@@ -612,6 +602,17 @@ int main(int argc, char** argv) {
       Eigen::Map<Eigen::Matrix<double, 7, 1>>(tau_d_array.data()) = tau_d;
       
       franka::Torques torques = tau_d_array;
+
+      // auto end = std::chrono::high_resolution_clock::now();
+
+      // if(index < max_index)
+      // {
+      //   elapsed_time_[index] = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+      // } else{
+      //   robot_stop = true;
+      // }
+
+      // index++;
 
       // if ctrl-c is pressed, robot should stop
       if (robot_stop) { return franka::MotionFinished(torques); }
@@ -632,13 +633,13 @@ int main(int argc, char** argv) {
     ft_thread = std::thread(ft_read);
 
   
-    robot.control(impedance_control_callback);
+    robot.control(impedance_control_callback, false, 200.0);
   } catch (const franka::Exception& ex) {
     std::cout << "Franka Exception: " << ex.what() << std::endl;
   } catch (const std::exception& ex) {
     std::cerr << "Misc Exception: " << ex.what() << std::endl;
   } catch (...) {
-      std::cerr << "Unknown exception caught." << std::endl;
+    std::cerr << "Unknown exception caught." << std::endl;
   }
 
   ft_running = false;
@@ -647,5 +648,26 @@ int main(int argc, char** argv) {
   ros_thread.join();
   ft_thread.join();
   sensor.on_deactivate();
+
+  // std::ofstream outfile("src/Data/"+ns+ "_timings.csv");
+  // if (outfile.is_open()) {
+  //       // Write each value of elapsed_time_ to the file
+  //       for (int i = 0; i < max_index; ++i) {
+  //           outfile << elapsed_time_[i];
+
+  //           // If it's not the last element, add a comma to separate the values
+  //           if (i < max_index - 1) {
+  //               outfile << ",";
+  //           }
+  //       }
+  //       outfile << "\n";  // Newline at the end of the row
+
+  //       std::cout << "Data has been written to data.csv\n";
+  //   } else {
+  //       std::cerr << "Error opening file for writing\n";
+  //   }
+
+  //   outfile.close();  // Close the file
+
   return 0;
 }
