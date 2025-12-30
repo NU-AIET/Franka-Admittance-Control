@@ -1,16 +1,13 @@
 {
-    "robot_ip": "panda0.robot",
-    "normal": {
-        "torque_smoothing": 100.0,
-        "force_limit": 7.5,
-        "torque_limit": 1.5,
-        "use_ergodic_force": false,
-        "ergodic_gains": [200.0, 200.0, 100.0],
+    "bilateral_a": {
+        "robot_ip": "panda0.robot",
+        "torque_smoothing": 200.0,
+        "force_limit": 200,
+        "torque_limit": 20,
         "stiffness": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         "damping": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-        "mass": [3.0, 3.0, 3.0, 1.0, 1.0, 1.0],
+        "mass": [2.0, 2.0, 2.0, 0.5, 0.5, 0.25],
         "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": false,
         "swap_torque": false,
         "use_friction_comp": false,
         "friction_comp": {
@@ -20,8 +17,8 @@
         },
         "use_boundry": true,
         "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
-            "max": [0.70,  0.25, 0.80, 1.0, 1.0, 1.57],
+            "min": [0.10, -0.35, 0.10, -1.0, -1.0, -1.57],
+            "max": [0.90,  0.35, 0.80, 1.0, 1.0, 1.57],
             "trans_stiffness": 200.0,
             "trans_damping": 25.0,
             "rot_stiffness": 20.0,
@@ -31,19 +28,25 @@
         "velocity_max": {
             "max_velocity": [0.2, 0.3, 0.2, 0.5, 0.5, 0.5],
             "damping": [45.0, 45.0, 45.0, 2.0, 2.0, 2.0]
-        }
+        },
+        "ft_ip": "192.168.18.12",
+        "ns" : "Alpha",
+        "partner_ns" : "Beta",
+        "bilateral_enable" : true,
+        "bilateral_trans_stiff": 2500,
+        "bilateral_rot_stiff": 10.0,
+        "bilateral_damping" : [20.0, 20.0, 40.0, 0.0, 0.0, 0.0],
+	    "load_mass": 0.1305
     },
-    "test": {
-        "torque_smoothing": 100.0,
-        "force_limit": 7.5,
-        "torque_limit": 1.5,
-        "use_ergodic_force": false,
-        "ergodic_gains": [200.0, 200.0, 100.0],
+    "bilateral_b": {
+        "robot_ip": "192.168.18.61",
+        "torque_smoothing": 200.0,
+        "force_limit": 200,
+        "torque_limit": 20,
         "stiffness": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         "damping": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-        "mass": [3.0, 3.0, 3.0, 1.0, 1.0, 1.0],
+        "mass": [2.0, 2.0, 2.0, 0.5, 0.5, 0.25],
         "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": true,
         "swap_torque": false,
         "use_friction_comp": false,
         "friction_comp": {
@@ -51,10 +54,10 @@
             "friction_viscous": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             "friction_sign_epsilon": 0.01
         },
-        "use_boundry": false,
+        "use_boundry": true,
         "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
-            "max": [0.70,  0.25, 0.80, 1.0, 1.0, 1.57],
+            "min": [0.10, -0.35, 0.10, -1.0, -1.0, -1.57],
+            "max": [0.90,  0.35, 0.80, 1.0, 1.0, 1.57],
             "trans_stiffness": 200.0,
             "trans_damping": 25.0,
             "rot_stiffness": 20.0,
@@ -62,173 +65,16 @@
         },
         "use_velocity_max": true,
         "velocity_max": {
-            "max_velocity": [0.3, 0.4, 0.2, 0.5, 0.5, 0.5],
+            "max_velocity": [0.2, 0.3, 0.2, 0.5, 0.5, 0.5],
             "damping": [45.0, 45.0, 45.0, 2.0, 2.0, 2.0]
-        }
-    },
-    "sin_demo": {
-        "torque_smoothing": 10.0,
-        "force_limit": 100.0,
-        "torque_limit": 100.0,
-        "use_ergodic_force": false,
-        "ergodic_gains": [200.0, 200.0, 100.0],
-        "stiffness": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "damping": [0.0, 10.0, 0.0, 0.0, 0.0, 0.0],
-        "mass": [1.0, 1.0, 1.0, 2.5, 2.5, 2.5],
-        "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": true,
-        "swap_torque": false,
-        "use_friction_comp": true,
-        "friction_comp": {
-            "friction_coulomb": [0.0, 0.0, 0.70, 0.0, 0.0, 0.0, 0.0],
-            "friction_viscous": [0.0, 0.0, 1.2, 0.0, 0.0, 0.0, 0.0],
-            "friction_sign_epsilon": 0.01
         },
-        "use_boundry": false,
-        "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.0],
-            "max": [0.60,  0.25, 0.80, 1.0, 1.0, 1.0],
-            "trans_stiffness": 60.0,
-            "trans_damping": 20.0,
-            "rot_stiffness": 20.0,
-            "rot_damping": 5.0
-        },
-        "use_velocity_max": false,
-        "velocity_max": {
-            "max_velocity": [0.4, 0.4, 0.4, 2.0, 2.0, 2.0],
-            "damping": [30.0, 30.0, 30.0, 20.0, 20.0, 20.0]
-        }
-    },
-    "ergodic": {
-        "force_limit": 7.5,
-        "torque_limit": 1.5,
-        "torque_smoothing": 100.0,
-        "use_ergodic_force": true,
-        "ergodic_gains": [50.0, 50.0, 0.0],
-        "stiffness": [0.0, 0.0, 250.0, 50.0, 50.0, 50.0],
-        "damping": [16.0, 16.0, 16.0, 10.0, 10.0, 10.0],
-        "mass": [3.0, 3.0, 3.0, 1.0, 1.0, 1.0],
-        "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": false,
-        "swap_torque": true,
-        "use_friction_comp": false,
-        "friction_comp": {
-            "friction_coulomb": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_viscous": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_sign_epsilon": 0.01
-        },
-        "use_boundry": true,
-        "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
-            "max": [0.75,  0.25, 0.80, 1.0, 1.0, 1.57],
-            "trans_stiffness": 200.0,
-            "trans_damping": 25.0,
-            "rot_stiffness": 20.0,
-            "rot_damping": 5.0
-        },
-        "use_velocity_max": true,
-        "velocity_max": {
-            "max_velocity": [0.3, 0.4, 0.2, 0.5, 0.5, 0.5],
-            "damping": [45.0, 45.0, 45.0, 1.5, 1.5, 1.5]
-        }
-    },
-    "fixed": {
-        "force_limit": 7.5,
-        "torque_limit": 1.5,
-        "torque_smoothing": 100.0,
-        "use_ergodic_force": false,
-        "ergodic_gains": [200.0, 200.0, 100.0],
-        "stiffness": [0.0, 0.0, 0.0, 50.0, 50.0, 50.0],
-        "damping": [1.0, 1.0, 1.0, 10.0, 10.0, 10.0],
-        "mass": [5.0, 5.0, 5.0, 1.0, 1.0, 1.0],
-        "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": false,
-        "swap_torque": true,
-        "use_friction_comp": false,
-        "friction_comp": {
-            "friction_coulomb": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_viscous": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_sign_epsilon": 0.01
-        },
-        "use_boundry": true,
-        "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
-            "max": [0.75,  0.25, 0.80, 1.0, 1.0, 1.57],
-            "trans_stiffness": 200.0,
-            "trans_damping": 25.0,
-            "rot_stiffness": 20.0,
-            "rot_damping": 5.0
-        },
-        "use_velocity_max": true,
-        "velocity_max": {
-            "max_velocity": [0.3, 0.4, 0.2, 0.5, 0.5, 0.5],
-            "damping": [45.0, 45.0, 45.0, 1.5, 1.5, 1.5]
-        }
-    },
-    "light": {
-        "torque_smoothing": 1000.0,
-        "force_limit": 1000.0,
-        "torque_limit": 1000.0,
-        "use_ergodic_force": false,
-        "ergodic_gains": [200.0, 200.0, 100.0],
-        "stiffness": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "damping": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-        "mass": [2.0, 2.0, 2.0, 1.0, 1.0, 1.0],
-        "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": false,
-        "swap_torque": false,
-        "use_friction_comp": false,
-        "friction_comp": {
-            "friction_coulomb": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_viscous": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_sign_epsilon": 0.01
-        },
-        "use_boundry": false,
-        "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
-            "max": [0.75,  0.25, 0.80, 1.0, 1.0, 1.57],
-            "trans_stiffness": 200.0,
-            "trans_damping": 25.0,
-            "rot_stiffness": 20.0,
-            "rot_damping": 5.0
-        },
-        "use_velocity_max": false,
-        "velocity_max": {
-            "max_velocity": [0.3, 0.4, 0.2, 0.5, 0.5, 0.5],
-            "damping": [45.0, 45.0, 45.0, 1.5, 1.5, 1.5]
-        }
-    },
-    "light_fixed": {
-        "torque_smoothing": 1000.0,
-        "force_limit": 1000.0,
-        "torque_limit": 1000.0,
-        "use_ergodic_force": false,
-        "ergodic_gains": [200.0, 200.0, 100.0],
-        "stiffness": [0.0, 0.0, 0.0, 50.0, 50.0, 50.0],
-        "damping": [1.0, 1.0, 1.0, 10.0, 10.0, 10.0],
-        "mass": [2.0, 2.0, 2.0, 1.0, 1.0, 1.0],
-        "joint_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "use_dummy_force": false,
-        "swap_torque": true,
-        "use_friction_comp": false,
-        "friction_comp": {
-            "friction_coulomb": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_viscous": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "friction_sign_epsilon": 0.01
-        },
-        "use_boundry": false,
-        "boundry": {
-            "min": [0.30, -0.25, 0.40, -1.0, -1.0, -1.57],
-            "max": [0.75,  0.25, 0.80, 1.0, 1.0, 1.57],
-            "trans_stiffness": 200.0,
-            "trans_damping": 25.0,
-            "rot_stiffness": 20.0,
-            "rot_damping": 5.0
-        },
-        "use_velocity_max": false,
-        "velocity_max": {
-            "max_velocity": [0.3, 0.4, 0.2, 0.5, 0.5, 0.5],
-            "damping": [45.0, 45.0, 45.0, 1.5, 1.5, 1.5]
-        }
+        "ft_ip": "192.168.18.13",
+        "ns" : "Beta",
+        "partner_ns" : "Alpha",
+        "bilateral_enable" : true,
+        "bilateral_trans_stiff": 2500,
+        "bilateral_rot_stiff": 10.0,
+        "bilateral_damping" : [20.0, 20.0, 40.0, 0.0, 0.0, 0.0],
+	    "load_mass": 0.2021
     }
 }

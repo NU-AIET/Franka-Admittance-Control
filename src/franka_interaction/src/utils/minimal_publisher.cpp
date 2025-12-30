@@ -1,93 +1,79 @@
 #include "minimal_publisher.hpp"
 
-MinimalPublisher::MinimalPublisher(SafeQueue<queue_package> & squeue_transfer, Eigen::Vector3d & goal,
-    std::mutex & goal_mutex, bool & use_goal, std::mutex & use_goal_mutex)
-: Node("minimal_publisher"), squeue_transfer_(squeue_transfer), goal_(goal), goal_mutex_(goal_mutex), use_goal_point_(use_goal), use_goal_mutex_(use_goal_mutex)
-{}
+MinimalPublisher::MinimalPublisher(
+    affine_buffer & EE_buffer,
+    Vector6d_buffer & EE_twist,
+    std::string ns,
+    affine_buffer & Mirror_buffer,
+    Vector6d_buffer & Mirror_twist,
+    std::string partner_ns)
+: Node("minimal_publisher"),
+  EE_buffer_(EE_buffer),
+  EE_twist_(EE_twist),
+  ns_(ns),
+  Mirror_buffer_(Mirror_buffer),
+  Mirror_twist_(Mirror_twist),
+  partner_ns_(partner_ns)
+{
+  EE_config_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/"+ns_+"/config", 1000);
+  EE_twist_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/"+ns_+"/twist", 1000);
 
-void MinimalPublisher::init() {
-  publisher_ = this->create_publisher<data_interfaces::msg::Robot>("robot_data", 10);
-
-  goal_subscription_ = this->create_subscription<geometry_msgs::msg::Point>(
-  "ergodic_goal", 10,
-  [this](const geometry_msgs::msg::Point::SharedPtr msg) {
-    std::lock_guard<std::mutex> lock(goal_mutex_);
-    goal_ << msg->x, msg->y, msg->z;
+  Mirror_config_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+  "/"+partner_ns_+"/config", 1000,
+  [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+    int next = 1 - Mirror_buffer_.active.load(std::memory_order_relaxed);
+    Mirror_buffer_.affines[next].linear() = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z).toRotationMatrix();
+    Mirror_buffer_.affines[next].translation() = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    Mirror_buffer_.active.store(next, std::memory_order_release);
   }
   );
 
-  toggle_goal_service_ = this->create_service<std_srvs::srv::SetBool>(
-  "toggle_goal_usage",
-  [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request, std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
-    std::lock_guard<std::mutex> lock(use_goal_mutex_);
-    use_goal_point_ = request->data;
-    response->success = true;
+  Mirror_twist_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+  "/"+partner_ns_+"/twist", 1000,
+  [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
+    int next = 1 - Mirror_twist_.active.load(std::memory_order_relaxed);
+    Mirror_twist_.vectors[next].head(3) = Eigen::Vector3d(msg->linear.x, msg->linear.y, msg->linear.z);
+    Mirror_twist_.vectors[next].tail(3) = Eigen::Vector3d(msg->angular.x, msg->angular.y, msg->angular.z);
+    Mirror_twist_.active.store(next, std::memory_order_release);
   }
   );
- 
 
   auto timer_callback = [this]() -> void {
-    queue_package data;
-    auto message = data_interfaces::msg::Robot();
-    while (squeue_transfer_.Consume(data)) {
-      message.accel.linear.x = data.desired_accel(0, 0);
-      message.accel.linear.y = data.desired_accel(1, 0);
-      message.accel.linear.z = data.desired_accel(2, 0);
-      message.accel.angular.x = data.desired_accel(3, 0);
-      message.accel.angular.y = data.desired_accel(4, 0);
-      message.accel.angular.z = data.desired_accel(5, 0);
+    int idx = EE_buffer_.active.load(std::memory_order_acquire);
+    Eigen::Affine3d pose = EE_buffer_.affines[idx];
+    auto msg = geometry_msgs::msg::PoseStamped();
+    msg.header.stamp = get_clock()->now();
+    msg.pose.position.x = pose.translation()(0);
+    msg.pose.position.y = pose.translation()(1);
+    msg.pose.position.z = pose.translation()(2);
 
-      message.ergodic_accel.linear.x = data.ergodic_accel(0);
-      message.ergodic_accel.linear.y = data.ergodic_accel(1);
-      message.ergodic_accel.linear.z = data.ergodic_accel(2);
+    Eigen::Matrix3d R = pose.linear();
 
-      message.actual_wrench.force.x = data.actual_wrench(0, 0);
-      message.actual_wrench.force.y = data.actual_wrench(1, 0);
-      message.actual_wrench.force.z = data.actual_wrench(2, 0);
-      message.actual_wrench.torque.x = data.actual_wrench(3, 0);
-      message.actual_wrench.torque.y = data.actual_wrench(4, 0);
-      message.actual_wrench.torque.z = data.actual_wrench(5, 0);
+    Eigen::Quaterniond q(R);
 
-      message.position.position.x = data.translation[0];
-      message.position.position.y = data.translation[1];
-      message.position.position.z = data.translation[2];
+    q.normalize();
 
-      message.position.orientation.x = data.orientation_error(0, 0);
-      message.position.orientation.y = data.orientation_error(1, 0);
-      message.position.orientation.z = data.orientation_error(2, 0);
-      message.position.orientation.w = 1.0;
+    msg.pose.orientation.x = q.x();
+    msg.pose.orientation.y = q.y();
+    msg.pose.orientation.z = q.z();
+    msg.pose.orientation.w = q.w();
 
-      message.position_d.position.x = data.translation_d[0];
-      message.position_d.position.y = data.translation_d[1];
-      message.position_d.position.z = data.translation_d[2];
+    EE_config_pub_->publish(msg);
 
-      message.velocity.linear.x = data.velocity[0];
-      message.velocity.linear.y = data.velocity[1];
-      message.velocity.linear.z = data.velocity[2];
+    int idy = EE_twist_.active.load(std::memory_order_acquire);
+    Vector6d V = EE_twist_.vectors[idy];
 
-      message.torques_desired.resize(7);
-      for (size_t i = 0; i < 7; ++i) {
-          message.torques_desired[i] = data.torques_d(i);
-      }
+    auto twist = geometry_msgs::msg::Twist();
 
-      message.torques_observed.resize(7);
-      for (size_t i = 0; i < 7; ++i) {
-          message.torques_observed[i] = data.torques_o(i);
-      }
+    twist.linear.x = V(0);
+    twist.linear.y = V(1);
+    twist.linear.z = V(2);
+    twist.angular.x = V(3);
+    twist.angular.y = V(4);
+    twist.angular.z = V(5);
 
-      message.torques_coriolis.resize(7);
-      for (size_t i = 0; i < 7; ++i) {
-          message.torques_coriolis[i] = data.torques_c(i);
-      }
-
-      message.torques_gravity.resize(7);
-      for (size_t i = 0; i < 7; ++i) {
-          message.torques_gravity[i] = data.torques_g(i);
-      }
-
-      publisher_->publish(message);
-    }
+    EE_twist_pub_->publish(twist);
   };
   
-  timer_ = this->create_wall_timer(std::chrono::milliseconds(10), timer_callback);
+  timer_ = this->create_wall_timer(std::chrono::milliseconds(1), timer_callback);
 }

@@ -6,5 +6,5 @@ rsync -a --no-owner --no-group --progress \
   --exclude 'data/' \
   --exclude 'src/data_analysis/' \
   --exclude 'src/ergodic/' \
-  /home/joe/final/TheWiggler/ \
-  student@station:/home/student/TheWiggler
+  /home/nova/research/aiet/ArmBilateral/ \
+  msr@192.168.18.1:/home/msr/Bilateral/
