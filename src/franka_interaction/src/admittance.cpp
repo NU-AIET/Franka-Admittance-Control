@@ -100,6 +100,11 @@ void ft_read(){
   }
 }
 
+// std::array<double, 7> joint_limit_upper{2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973};
+// std::array<double, 7> joint_limit_lower{-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973};
+Vector7d joint_limit_middle = Vector7d{0.0, 0.0, 0.0, -1.5708, 0.0, 1.8675, 0.0};
+// std::array<double, 7> joint_limit_range{5.7946, 3.5256, 5.7946, 3.002 ,5.7946, 3.77, 5.7946};
+
 /**
  * An admittance controller designed to interface with a Axia M8 F/T sensor at the wrist. Bounding boxes,
  * velocity limits, and control parameters can be configured in the configuration named when the contoller
@@ -137,18 +142,18 @@ int main(int argc, char** argv) {
   //Virtual Stiffness
   std::array<double, 6> stiffness_values = config[config_name]["stiffness"];
   Vector6d stiffness_vec = Eigen::Map<Vector6d>(stiffness_values.data());
-  const Matrix6d stiffness = stiffness_vec.asDiagonal();
+  const Matrix6d virtual_stiffness = stiffness_vec.asDiagonal();
 
   //Virtual Damping
   std::array<double, 6> damping_values = config[config_name]["damping"];
   Vector6d damping_vec = Eigen::Map<Vector6d>(damping_values.data());
-  const Matrix6d damping = damping_vec.asDiagonal();
+  const Matrix6d virtual_damping = damping_vec.asDiagonal();
 
   //mass matrix
   std::array<double, 6> mass_values = config[config_name]["mass"];
   Vector6d mass_vec = Eigen::Map<Vector6d>(mass_values.data());
   Matrix6d virtual_mass = mass_vec.asDiagonal();
-  const Matrix6d M_v_inv = virtual_mass.inverse();
+  const Matrix6d virtual_mass_inv = virtual_mass.inverse();
 
   //joint weights
   std::array<double, 7> weight_values = config[config_name]["joint_weight"];
@@ -159,32 +164,32 @@ int main(int argc, char** argv) {
   bool use_friction_comp = config[config_name]["use_friction_comp"];
   double coulomb_epsilon = config[config_name]["friction_comp"]["friction_sign_epsilon"];
   std::array<double, 7> coulomb_values = config[config_name]["friction_comp"]["friction_coulomb"];
-  Vector7d coulomb_frictions = Eigen::Map<Vector7d>(coulomb_values.data());
+  const Vector7d coulomb_frictions = Eigen::Map<Vector7d>(coulomb_values.data());
 
   std::array<double, 7> viscous_values = config[config_name]["friction_comp"]["friction_viscous"];
-  Vector7d viscous_frictions = Eigen::Map<Vector7d>(viscous_values.data());
+  const Vector7d viscous_frictions = Eigen::Map<Vector7d>(viscous_values.data());
 
   //boundry conditions
-  bool use_boundry = config[config_name]["use_boundry"];
+  const bool use_boundry = config[config_name]["use_boundry"];
 
   std::array<double, 6> boundry_min_values = config[config_name]["boundry"]["min"];
-  Vector6d boundry_min = Eigen::Map<Vector6d>(boundry_min_values.data());
+  const Vector6d boundry_min = Eigen::Map<Vector6d>(boundry_min_values.data());
 
   std::array<double, 6> boundry_max_values = config[config_name]["boundry"]["max"];
-  Vector6d boundry_max = Eigen::Map<Vector6d>(boundry_max_values.data());
+  const Vector6d boundry_max = Eigen::Map<Vector6d>(boundry_max_values.data());
 
-  double boundry_trans_stiffness = config[config_name]["boundry"]["trans_stiffness"];
-  double boundry_rot_stiffness = config[config_name]["boundry"]["rot_stiffness"];
-  double boundry_trans_damping = config[config_name]["boundry"]["trans_damping"];
-  double boundry_rot_damping = config[config_name]["boundry"]["rot_damping"];
+  const double boundry_trans_stiffness = config[config_name]["boundry"]["trans_stiffness"];
+  const double boundry_rot_stiffness = config[config_name]["boundry"]["rot_stiffness"];
+  const double boundry_trans_damping = config[config_name]["boundry"]["trans_damping"];
+  const double boundry_rot_damping = config[config_name]["boundry"]["rot_damping"];
 
   //velocity limits
   bool use_velocity_max = config[config_name]["use_velocity_max"];
   std::array<double, 6> velocity_max_values = config[config_name]["velocity_max"]["max_velocity"];
-  Vector6d velocity_max = Eigen::Map<Vector6d>(velocity_max_values.data());
+  const Vector6d velocity_max = Eigen::Map<Vector6d>(velocity_max_values.data());
 
   std::array<double, 6> velocity_max_damping_values = config[config_name]["velocity_max"]["damping"];
-  Vector6d velocity_max_damping = Eigen::Map<Vector6d>(velocity_max_damping_values.data());
+  const Vector6d velocity_max_damping = Eigen::Map<Vector6d>(velocity_max_damping_values.data());
 
   const std::string ft_ip = config[config_name]["ft_ip"];
   const std::string ns = config[config_name]["ns"];
@@ -200,6 +205,16 @@ int main(int argc, char** argv) {
 
   const Eigen::Matrix3d K_T = Eigen::Matrix3d::Identity() * bilateral_trans_stiffness;
   const Eigen::Matrix3d K_R = Eigen::Matrix3d::Identity() * bilateral_rot_stiffness;
+
+  const bool null_space_avoid = config[config_name]["null_enable"];
+  const double joint_avoid_k = config[config_name]["joint_limit_stiffness"];
+  const double joint_avoid_c = config[config_name]["joint_limit_damping"];
+
+  Vector7d joint_limit_stiffness = joint_avoid_k * Vector7d{0.0297819462745, 0.0804514590908, 0.0297819462745, 0.11096311098, 0.0297819462745, 0.0703586178753, 0.0297819462745};
+  const Matrix7d Joint_Avoidance_Stiffness = joint_limit_stiffness.asDiagonal();
+  Vector7d joint_limit_damping = joint_avoid_c * Vector7d{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  const Matrix7d Joint_Avoidance_Damping = joint_limit_damping.asDiagonal();
+
 
   //connect to sensor, see data sheet for filter selection based on sampling rate.
   net_ft_driver::ft_info input;
@@ -219,7 +234,7 @@ int main(int argc, char** argv) {
   
   // shifted down in sensor frame (up to the user)
   // Luke this is right, stop changing it 
-  Eigen::Vector3d sensor_translation {0.0, 0.0, -0.0424};
+  const Eigen::Vector3d sensor_translation {0.0, 0.0, -0.0424};
   Eigen::Affine3d EE_to_Sensor;
 
   EE_to_Sensor.linear() = sensor_rotation;
@@ -228,8 +243,8 @@ int main(int argc, char** argv) {
   Matrix6d Adjoint_EE_to_Sensor = Matrix6d::Zero();
   Adjoint(Adjoint_EE_to_Sensor, EE_to_Sensor);
 
-  double load_mass = config[config_name]["load_mass"];
-  double load_weight = load_mass * 9.81;
+  const double load_mass = config[config_name]["load_mass"];
+  const double load_weight = load_mass * 9.81;
 
   const Eigen::Vector3d gravity_vec{0.0, 0.0, -9.81};
 
@@ -247,6 +262,17 @@ int main(int argc, char** argv) {
 
   Handle_to_EE.translation() = Eigen::Vector3d{0.0, 0.0, 0.1};
   Handle_to_EE.linear() = Eigen::Matrix3d::Identity();
+
+  Eigen::Affine3d EE_to_Handle = Handle_to_EE.inverse();
+
+  Matrix6d Adjoint_EE_to_Handle = Matrix6d::Zero();
+
+  Adjoint(Adjoint_EE_to_Handle, EE_to_Handle);
+
+  const Matrix6d Virtual_Mass_EE = Adjoint_EE_to_Handle.transpose() * virtual_mass * Adjoint_EE_to_Handle;
+  const Matrix6d Virtual_Mass_Inv_EE = Virtual_Mass_EE.inverse();
+  const Matrix6d Virtual_Damping_EE = Adjoint_EE_to_Handle.transpose() * virtual_damping * Adjoint_EE_to_Handle;
+  const Matrix6d Virtual_Stiffness_EE = Adjoint_EE_to_Handle.transpose() * virtual_stiffness * Adjoint_EE_to_Handle;
 
   Eigen::Affine3d Handle_to_World;
 
@@ -316,7 +342,9 @@ int main(int argc, char** argv) {
                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
 
+    // ===============================================
     // BEGIN VARIABLE DECLARATION FOR CONTROL FUNCTION
+    // ===============================================
     franka_model_calculations model_calculations;
 
     std::array<double, 6> ft_reading{};
@@ -372,11 +400,14 @@ int main(int argc, char** argv) {
 
     Eigen::Affine3d bilateral_error = Eigen::Affine3d::Identity();
 
-    Eigen::Vector3d bilateral_force_EE = Eigen::Vector3d::Zero();
-    Eigen::Matrix3d bilateral_skew_EE = Eigen::Matrix3d::Zero();
-    Eigen::Vector3d bilateral_torque_EE = Eigen::Vector3d::Zero();
+    Eigen::Vector3d bilateral_force_Handle = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d bilateral_skew_Handle = Eigen::Matrix3d::Zero();
+    Eigen::Vector3d bilateral_torque_Handle = Eigen::Vector3d::Zero();
 
     Vector6d bilateral_wrench_EW = Vector6d::Zero();
+
+    Eigen::Matrix3d Handle_to_EE_Skew = Eigen::Matrix3d::Zero();
+    Vec2Skew(Handle_to_EE_Skew, Eigen::Vector3d{0.0, 0.0, 0.1});
 
     Vector7d bilateral_tau = Vector7d::Zero();
 
@@ -386,6 +417,19 @@ int main(int argc, char** argv) {
     Eigen::LLT<Matrix6d> llt;
     Vector6d rhs = Vector6d::Zero();
     Vector6d lhs = Vector6d::Zero();
+
+    Matrix7d mass_inv = Matrix7d::Zero();
+
+    Matrix6d lambda = Matrix6d::Zero();
+
+    Vector7d null_torque = Vector7d::Zero();
+
+    const Matrix7d I_7 = Matrix7d::Identity();
+
+    Matrix7d N = Matrix7d::Zero();
+    Eigen::Matrix<double, 7, 6> J_bar = Eigen::Matrix<double, 7, 6>::Zero();
+
+
 
     constexpr double alpha = 0.1;
 
@@ -475,7 +519,7 @@ int main(int argc, char** argv) {
       fexternal_wrench_EW.head(3) = EE_to_World.rotation() * fexternal_wrench_EE.head(3);
       fexternal_wrench_EW.tail(3) = EE_to_World.rotation() * fexternal_wrench_EE.tail(3);
 
-      //precompute velocity from jacobian for reuse
+      // Precompute velocity from jacobian for reuse
       // This is a world aligned twist located at EE
       spatial_velocity.noalias()  = spatial_jacobian * dq;
 
@@ -484,11 +528,14 @@ int main(int argc, char** argv) {
       EE_twist_buffer.active.store(next_vel, std::memory_order_release);
       Mirror_velocity = Mirror_twist_buffer.vectors[Mirror_twist_buffer.active.load(std::memory_order_acquire)];
 
-      damping_wrench_EW.noalias() = damping * spatial_velocity;
+      // damping_wrench_EW.noalias() = Virtual_Damping_EE * spatial_velocity;
+      // damping_wrench_EW.noalias() = virtual_damping * spatial_velocity;
 
       // Maybe replace with a better error method / Bilateral Control
-      // spring_wrench_EW.noalias() = stiffness * spatial_error;
+      // spring_wrench_EW.noalias() = Virtual_Stiffness_EE * spatial_error;
 
+
+      // Very unclear why this would be needed?
       if (swap_torque) {
         fexternal_wrench_EW(3) = -fexternal_wrench_EW(3);
         fexternal_wrench_EW(4) = -fexternal_wrench_EW(4);
@@ -497,7 +544,7 @@ int main(int argc, char** argv) {
 
       fnet_wrench_EW = fexternal_wrench_EW - damping_wrench_EW - spring_wrench_EW;
 
-      // Clamp fext to help prevent off-phase run away
+      // Clamp fext for saftey 
       for(int i = 0; i <3; ++i) {
         fnet_wrench_EW(i) = std::clamp(fnet_wrench_EW(i), -force_limit, force_limit);
       }
@@ -508,12 +555,12 @@ int main(int argc, char** argv) {
 
       // compute control MR 11.66 Virtual Dynamics 
       // a = F/m
-      spatial_accel_d.noalias() = M_v_inv * fnet_wrench_EW;
+      // spatial_accel_d.noalias() = Virtual_Mass_Inv_EE * fnet_wrench_EW;
+      spatial_accel_d.noalias() = virtual_mass_inv * fnet_wrench_EW;
 
       // compute boundry acceleration to keep EE in bounds
       if (use_boundry) {
         boundary_correction.noalias()  = (spatial_position - boundry_max).cwiseMax(0.0) + (spatial_position - boundry_min).cwiseMin(0.0);
-
 
         boundary_decel.setZero();
         // if out of bounds anywhere, apply corrective force and damp user movement
@@ -546,16 +593,17 @@ int main(int argc, char** argv) {
       ddq_d.noalias() = W_inv * spatial_jacobian.transpose() * lhs;
       
       // MR 8.1 : inverse dynamics, add all control elements together
-      ///TODO: !!! Check if coriolis term is needed or automatically added in???? !!!
+      // F = ma
       tau_d.noalias() = (mass * ddq_d);
 
       if (use_friction_comp) {
-        dq_smooth_sign= dq.array() / (dq.array().square() + coulomb_epsilon * coulomb_epsilon).sqrt();
+        dq_smooth_sign = dq.array() / (dq.array().square() + coulomb_epsilon * coulomb_epsilon).sqrt();
 
         // total friction comp
         friction_comp_tau.noalias()  =  coulomb_frictions.cwiseProduct(dq_smooth_sign) + viscous_frictions.cwiseProduct(dq);
         tau_d += friction_comp_tau;
       }
+
 
       // Bilateral coupling
 
@@ -565,31 +613,42 @@ int main(int argc, char** argv) {
 
       bilateral_error = Mirror_to_World.inverse() * Handle_to_World;
 
-      bilateral_force_EE.noalias()  = -bilateral_error.rotation().transpose() * K_T * bilateral_error.translation();
-      // bilateral_force_EE = K_T * bilateral_error.translation();
+      bilateral_force_Handle.noalias()  = -bilateral_error.rotation().transpose() * K_T * bilateral_error.translation();
+      // bilateral_force_Handle = K_T * bilateral_error.translation();
 
       for (int i = 0; i<3; ++i){
-        bilateral_force_EE(i) = std::clamp(bilateral_force_EE(i), -force_limit, force_limit);
+        bilateral_force_Handle(i) = std::clamp(bilateral_force_Handle(i), -force_limit, force_limit);
       }
       
       // Normally the second K_R should be transposed, but as a diagonal matrix, it does not matter
-      bilateral_skew_EE.noalias()  = -(K_R * bilateral_error.rotation() - bilateral_error.rotation().transpose() * K_R);
+      bilateral_skew_Handle.noalias()  = -(K_R * bilateral_error.rotation() - bilateral_error.rotation().transpose() * K_R);
 
-      Skew2Vec(bilateral_torque_EE, bilateral_skew_EE);
+      Skew2Vec(bilateral_torque_Handle, bilateral_skew_Handle);
 
       for (int i = 0; i<3; ++i){
-        bilateral_torque_EE(i) = std::clamp(bilateral_torque_EE(i), -torque_limit, torque_limit);
+        bilateral_torque_Handle(i) = std::clamp(bilateral_torque_Handle(i), -torque_limit, torque_limit);
       }
 
-      bilateral_wrench_EW.head(3) = EE_to_World.rotation() * bilateral_force_EE;
-      bilateral_wrench_EW.tail(3) = EE_to_World.rotation() * bilateral_torque_EE;
+      bilateral_wrench_EW.head(3) = EE_to_World.rotation() * bilateral_force_Handle;
+      bilateral_wrench_EW.tail(3) = EE_to_World.rotation() * bilateral_torque_Handle + Handle_to_EE_Skew * bilateral_wrench_EW.head(3);
 
       bilateral_wrench_EW += bilateral_C * (Mirror_velocity - spatial_velocity);
-
 
       if(bilateral){
         bilateral_tau.noalias()  = spatial_jacobian.transpose() * bilateral_wrench_EW;
         tau_d += bilateral_tau;
+      }
+
+      if(null_space_avoid){
+        mass_inv = mass.inverse();
+        lambda = spatial_jacobian * mass_inv * spatial_jacobian.transpose();
+
+        J_bar = mass_inv * spatial_jacobian.transpose() * lambda.inverse();
+        N = I_7 - spatial_jacobian.transpose() * J_bar.transpose();
+
+        null_torque = -Joint_Avoidance_Stiffness * (q - joint_limit_middle) - Joint_Avoidance_Damping * dq;
+
+        tau_d += N.transpose() * null_torque;
       }
 
       // Spec sheet lists 1000/sec as maximum but in practice should be much lower for smooth human use.
@@ -632,7 +691,6 @@ int main(int argc, char** argv) {
 
     ft_thread = std::thread(ft_read);
 
-  
     robot.control(impedance_control_callback, false, 200.0);
   } catch (const franka::Exception& ex) {
     std::cout << "Franka Exception: " << ex.what() << std::endl;
