@@ -100,6 +100,14 @@ void ft_read(){
   }
 }
 
+struct sgn {
+  double operator()(double x) const {
+    return (x > 0) - (x < 0);
+  }
+};
+
+
+
 // std::array<double, 7> joint_limit_upper{2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973};
 // std::array<double, 7> joint_limit_lower{-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973};
 Vector7d joint_limit_middle = Vector7d{0.0, 0.0, 0.0, -1.5708, 0.0, 1.8675, 0.0};
@@ -429,7 +437,14 @@ int main(int argc, char** argv) {
     Matrix7d N = Matrix7d::Zero();
     Eigen::Matrix<double, 7, 6> J_bar = Eigen::Matrix<double, 7, 6>::Zero();
 
-
+    bool stribeck = true;
+    Vector7d St = Vector7d::Zero();
+    Vector7d sgn_dq = Vector7d::Zero();
+    Vector7d Fc = Vector7d{0.2247, 0.1293, 0.1681, 0.3791, 0.2231, 0.1497, 0.1936};
+    Vector7d Fv = Vector7d{0.0497, 0.1708, 0.0774, 0.1792, 0.1038, 0.0129, 0.0655}; 
+    Vector7d Fs = Vector7d{6.5308e-22, -8.6085e-28, 1.6565e-20, 5.8329e-24, 3.7780e-25, 7.4546e-22, 2.7360e-21};
+    Vector7d Kv = Vector7d{0.999954020875, 0.999954020875, 0.999954020875, 0.999954020875, 0.897948448185, 0.898007496548, 0.898007496548};
+    Vector7d tau_f = Vector7d::Zero();
 
     constexpr double alpha = 0.1;
 
@@ -602,6 +617,12 @@ int main(int argc, char** argv) {
         // total friction comp
         friction_comp_tau.noalias()  =  coulomb_frictions.cwiseProduct(dq_smooth_sign) + viscous_frictions.cwiseProduct(dq);
         tau_d += friction_comp_tau;
+      }
+
+      if(stribeck){
+        sgn_dq = dq.unaryExpr(sgn{});
+        St = Fs.cwiseProduct((-1.0 * Kv.cwiseProduct(sgn_dq.cwiseProduct(dq)).array().exp()).matrix());
+        tau_f = (sgn_dq).cwiseProduct(Fc + St) + Fv.cwiseProduct(dq);
       }
 
 
