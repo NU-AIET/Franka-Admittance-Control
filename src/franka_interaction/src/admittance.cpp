@@ -106,6 +106,11 @@ struct sgn {
   }
 };
 
+// struct array_6{
+//   Eigen::Vector3d linear_energy;
+//   Eigen::Vector3d rotational_energy;
+// };
+
 
 
 // std::array<double, 7> joint_limit_upper{2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973};
@@ -160,8 +165,8 @@ int main(int argc, char** argv) {
   //mass matrix
   std::array<double, 6> mass_values = config[config_name]["mass"];
   Vector6d mass_vec = Eigen::Map<Vector6d>(mass_values.data());
-  Matrix6d virtual_mass = mass_vec.asDiagonal();
-  const Matrix6d virtual_mass_inv = virtual_mass.inverse();
+  const Matrix6d virtual_mass = mass_vec.asDiagonal();
+  const Matrix6d virtual_mass_inv_0 = virtual_mass.inverse();
 
   //joint weights
   std::array<double, 7> weight_values = config[config_name]["joint_weight"];
@@ -252,16 +257,15 @@ int main(int argc, char** argv) {
   Adjoint(Adjoint_EE_to_Sensor, EE_to_Sensor);
 
   const double load_mass = config[config_name]["load_mass"];
+  const std::array<double, 3> load_com = config[config_name]["load_com"];
+  const std::array<double, 9> load_inertia = config[config_name]["load_inertia_matrix"];
   const double load_weight = load_mass * 9.81;
 
   const Eigen::Vector3d gravity_vec{0.0, 0.0, -9.81};
 
-  const std::array<double, 3> payload_com{0.0, 0.0, 0.06};
-  const std::array<double, 9> payload_inertia{0.0005, 0.0, 0.0, 0.0, 0.0005, 0.0, 0.0, 0.0, 0.0005};
-
   Eigen::Affine3d Load_to_EE;
 
-  Load_to_EE.translation() = Eigen::Vector3d::Map(payload_com.data());
+  Load_to_EE.translation() = Eigen::Vector3d::Map(load_com.data());
   Load_to_EE.linear() = Eigen::Matrix3d::Identity();
 
   Eigen::Affine3d EE_to_Load = Load_to_EE.inverse();
@@ -300,9 +304,10 @@ int main(int argc, char** argv) {
   Vector6d_buffer EE_twist_buffer;
 
 
-  constexpr int max_index = 100000;
-  int index = 0;
-  std::array<int, max_index> elapsed_time_;
+  // constexpr int max_index = 100000;
+  // int index = 0;
+  // std::array<int, max_index> elapsed_time_;
+  // std::array<array_6, max_index> energies_;
 
   try {
     // connect to robot
@@ -322,7 +327,9 @@ int main(int argc, char** argv) {
     // load the kinematics and dynamics model
     franka::Model model = robot.loadModel();
 
-    robot.setLoad(load_mass, payload_com, payload_inertia);
+    const double franka_load_mass = (load_mass > 3.0) ? 3.0 : load_mass;
+
+    robot.setLoad(load_mass, load_com, load_inertia);
 
     franka::RobotState initial_state = robot.readOnce();
 
@@ -358,6 +365,7 @@ int main(int argc, char** argv) {
     std::array<double, 6> ft_reading{};
 
     Vector6d spatial_accel_d = Vector6d::Zero();
+    Vector6d last_spatial_accel_d = Vector6d::Zero();
 
     Vector6d spatial_position = Vector6d::Zero();
     Vector6d old_spatial_position = Vector6d::Zero();
@@ -381,6 +389,8 @@ int main(int argc, char** argv) {
     Eigen::Matrix<double, 6, 7> old_spatial_jacobian;
     Eigen::Matrix<double, 6, 7> djacobian;
 
+    
+
     Matrix6d Adjoint_Load_to_EE = Matrix6d::Zero();
     Adjoint(Adjoint_Load_to_EE, Load_to_EE);
 
@@ -401,6 +411,7 @@ int main(int argc, char** argv) {
 
     Vector6d damping_decel = Vector6d::Zero();
 
+    Eigen::Matrix<double, 7, 6> J_inv = Eigen::Matrix<double, 7, 6>::Zero();
     Eigen::Matrix<double, 7, 6> J_inv_weighted = Eigen::Matrix<double, 7, 6>::Zero();
 
     Vector7d friction_comp_tau = Vector7d::Zero();
@@ -428,7 +439,7 @@ int main(int argc, char** argv) {
 
     Matrix7d mass_inv = Matrix7d::Zero();
 
-    Matrix6d lambda = Matrix6d::Zero();
+    Matrix6d lambda_inv = Matrix6d::Zero();
 
     Vector7d null_torque = Vector7d::Zero();
 
@@ -445,6 +456,14 @@ int main(int argc, char** argv) {
     Vector7d Fs = Vector7d{6.5308e-22, -8.6085e-28, 1.6565e-20, 5.8329e-24, 3.7780e-25, 7.4546e-22, 2.7360e-21};
     Vector7d Kv = Vector7d{0.999954020875, 0.999954020875, 0.999954020875, 0.999954020875, 0.897948448185, 0.898007496548, 0.898007496548};
     Vector7d tau_f = Vector7d::Zero();
+
+    Vector6d Bilateral_Energy_Raw = Vector6d::Zero();
+    Vector6d Bilateral_Energy = Vector6d::Zero();
+
+    Matrix6d virtual_mass_inv = Matrix6d::Zero();
+    Matrix6d bilateral_mass_addition = Matrix6d::Zero();
+
+    constexpr double energy_to_mass_ratio = 3.0; //J/kg (nominal lol, off by a factor of 1/2)
 
     constexpr double alpha = 0.1;
 
@@ -511,6 +530,7 @@ int main(int argc, char** argv) {
       }
 
       old_spatial_jacobian = spatial_jacobian;
+      J_inv = spatial_jacobian.completeOrthogonalDecomposition().pseudoInverse();
 
       // Potentially add Force-Torque filtering
 
@@ -524,6 +544,7 @@ int main(int argc, char** argv) {
 
 
       fexternal_wrench_EE -= gravity_wrench_EE;
+      
       // Sensor biases weight out so we need to add it back in
       fexternal_wrench_EE(2) += load_weight; 
 
@@ -562,6 +583,10 @@ int main(int argc, char** argv) {
       // Clamp fext for saftey 
       for(int i = 0; i <3; ++i) {
         fnet_wrench_EW(i) = std::clamp(fnet_wrench_EW(i), -force_limit, force_limit);
+        // Apply significant limit to Z direction
+        if(i == 2) {
+          fnet_wrench_EW(i) = std::clamp(fnet_wrench_EW(i), -0.125 * force_limit, 0.125 * force_limit);
+        }
       }
 
       for(int i = 3; i <6; ++i) {
@@ -571,7 +596,13 @@ int main(int argc, char** argv) {
       // compute control MR 11.66 Virtual Dynamics 
       // a = F/m
       // spatial_accel_d.noalias() = Virtual_Mass_Inv_EE * fnet_wrench_EW;
-      spatial_accel_d.noalias() = virtual_mass_inv * fnet_wrench_EW;
+
+      bilateral_mass_addition = energy_to_mass_ratio * Bilateral_Energy.asDiagonal();
+      virtual_mass_inv = (virtual_mass + bilateral_mass_addition);
+
+      spatial_accel_d.noalias() = virtual_mass_inv.inverse() * fnet_wrench_EW;
+
+
 
       // compute boundry acceleration to keep EE in bounds
       if (use_boundry) {
@@ -597,6 +628,7 @@ int main(int argc, char** argv) {
         spatial_accel_d += damping_decel;
       }
 
+
       // MR 6.7 weighted pseudoinverse
       A.noalias()  = (spatial_jacobian * W_inv * spatial_jacobian.transpose());
 
@@ -608,8 +640,11 @@ int main(int argc, char** argv) {
       ddq_d.noalias() = W_inv * spatial_jacobian.transpose() * lhs;
       
       // MR 8.1 : inverse dynamics, add all control elements together
+      // Note that coriolis and friction and gravity is handled by libfranka
       // F = ma
       tau_d.noalias() = (mass * ddq_d);
+
+      last_spatial_accel_d = spatial_accel_d;
 
       if (use_friction_comp) {
         dq_smooth_sign = dq.array() / (dq.array().square() + coulomb_epsilon * coulomb_epsilon).sqrt();
@@ -624,7 +659,6 @@ int main(int argc, char** argv) {
         St = Fs.cwiseProduct((-1.0 * Kv.cwiseProduct(sgn_dq.cwiseProduct(dq)).array().exp()).matrix());
         tau_f = (sgn_dq).cwiseProduct(Fc + St) + Fv.cwiseProduct(dq);
       }
-
 
       // Bilateral coupling
 
@@ -653,18 +687,24 @@ int main(int argc, char** argv) {
       bilateral_wrench_EW.head(3) = EE_to_World.rotation() * bilateral_force_Handle;
       bilateral_wrench_EW.tail(3) = EE_to_World.rotation() * bilateral_torque_Handle + Handle_to_EE_Skew * bilateral_wrench_EW.head(3);
 
+
+      Bilateral_Energy_Raw.head(3).noalias() = bilateral_wrench_EW.head(3).cwiseProduct(bilateral_error.translation());
+      Bilateral_Energy_Raw.head(1) *= -1;
+
+      Bilateral_Energy = 0.9 * Bilateral_Energy + 0.1 * Bilateral_Energy_Raw;
+
       bilateral_wrench_EW += bilateral_C * (Mirror_velocity - spatial_velocity);
 
-      if(bilateral){
-        bilateral_tau.noalias()  = spatial_jacobian.transpose() * bilateral_wrench_EW;
+      if(bilateral) {
+        bilateral_tau.noalias() = spatial_jacobian.transpose() * bilateral_wrench_EW;
         tau_d += bilateral_tau;
       }
 
       if(null_space_avoid){
         mass_inv = mass.inverse();
-        lambda = spatial_jacobian * mass_inv * spatial_jacobian.transpose();
+        lambda_inv = spatial_jacobian * mass_inv * spatial_jacobian.transpose();
 
-        J_bar = mass_inv * spatial_jacobian.transpose() * lambda.inverse();
+        J_bar = mass_inv * spatial_jacobian.transpose() * lambda_inv.inverse();
         N = I_7 - spatial_jacobian.transpose() * J_bar.transpose();
 
         null_torque = -Joint_Avoidance_Stiffness * (q - joint_limit_middle) - Joint_Avoidance_Damping * dq;
@@ -687,7 +727,7 @@ int main(int argc, char** argv) {
 
       // if(index < max_index)
       // {
-      //   elapsed_time_[index] = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+      //   // elapsed_time_[index] = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
       // } else{
       //   robot_stop = true;
       // }
@@ -712,7 +752,7 @@ int main(int argc, char** argv) {
 
     ft_thread = std::thread(ft_read);
 
-    robot.control(impedance_control_callback, false, 200.0);
+    robot.control(impedance_control_callback, false, 300.0);
   } catch (const franka::Exception& ex) {
     std::cout << "Franka Exception: " << ex.what() << std::endl;
   } catch (const std::exception& ex) {
@@ -728,16 +768,18 @@ int main(int argc, char** argv) {
   ft_thread.join();
   sensor.on_deactivate();
 
-  // std::ofstream outfile("src/Data/"+ns+ "_timings.csv");
+  // std::ofstream outfile("src/Data/"+ns+ "_energy.csv");
   // if (outfile.is_open()) {
   //       // Write each value of elapsed_time_ to the file
   //       for (int i = 0; i < max_index; ++i) {
-  //           outfile << elapsed_time_[i];
+  //           outfile << energies_[i].linear_energy.x() << ","
+  //                   << energies_[i].linear_energy.y() << ","
+  //                   << energies_[i].linear_energy.z() << "\n";
 
   //           // If it's not the last element, add a comma to separate the values
-  //           if (i < max_index - 1) {
-  //               outfile << ",";
-  //           }
+  //           // if (i < max_index - 1) {
+  //           //     outfile << ",";
+  //           // }
   //       }
   //       outfile << "\n";  // Newline at the end of the row
 
