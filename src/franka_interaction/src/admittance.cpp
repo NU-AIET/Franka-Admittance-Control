@@ -258,7 +258,7 @@ int main(int argc, char** argv) {
 
   const double load_mass = config[config_name]["load_mass"];
   const std::array<double, 3> load_com = config[config_name]["load_com"];
-  const std::array<double, 9> load_inertia = config[config_name]["load_inertia_matrix"];
+  const std::array<double, 9> load_inertia = config[config_name]["load_inertia"];
   const double load_weight = load_mass * 9.81;
 
   const Eigen::Vector3d gravity_vec{0.0, 0.0, -9.81};
